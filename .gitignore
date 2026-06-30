@@ -1,0 +1,29 @@
+# Build
+build/
+cmake-build-*/
+*.o
+*.a
+*.so
+
+# Claude / AI scaffold files — never upload to GitHub
+.planning/
+docs/superpowers/
+
+# Fuzzer artifacts
+corpus/
+crash-*
+leak-*
+timeout-*
+
+# Benchmark output
+*.json
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
