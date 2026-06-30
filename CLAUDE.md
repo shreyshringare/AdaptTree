@@ -22,6 +22,21 @@ AdaptTree is a C++20 B+ tree storage engine with WAL, MVCC, differential fuzzing
 - No external ML or learned-index libraries — PGM construction is pure geometry.
 - `pread`/`pwrite` for all file I/O (POSIX only; WSL2 acceptable for dev).
 
+## Phase Summaries
+
+After every phase is complete (all tests green, final commit done), write a detailed summary to `.planning/phases/phase-N/SUMMARY.md`. The summary must include:
+
+1. **Status and test count** — e.g. "36/36 green"
+2. **Requirements covered** — list each requirement ID
+3. **What was built** — one paragraph describing the purpose of the phase
+4. **Files created** — for every file: its path, what it contains, why each design decision was made, and how it connects to other layers
+5. **Page/data layout** — ASCII diagram if the phase introduces any in-memory or on-disk layout
+6. **Key design decisions** — numbered list of non-obvious choices and the reasoning
+7. **Commits** — list of commit messages in order
+8. **Interface contract for the next phase** — what the next phase may call and what invariants it must preserve
+
+Summaries live in `.planning/` so they are gitignored and never pushed to GitHub.
+
 ## What NOT to do
 
 - Do not refactor code outside the current task scope.
