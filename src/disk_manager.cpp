@@ -102,9 +102,15 @@ uint32_t DiskManager::allocatePage() {
 void DiskManager::readPage(uint32_t page_id, Page& page) {
     off_t offset = static_cast<off_t>(page_id) * PAGE_SIZE;
     pread_all(fd_, page.rawBytes(), PAGE_SIZE, offset);
+    // T01: verify CRC after read; skip if CRC field is 0 (freshly allocated page).
+    if (page.header().crc32 != 0 && !page.verifyChecksum()) {
+        throw std::runtime_error("DiskManager: CRC32 mismatch on page " + std::to_string(page_id));
+    }
 }
 
-void DiskManager::writePage(uint32_t page_id, const Page& page) {
+void DiskManager::writePage(uint32_t page_id, Page& page) {
+    // T01: stamp CRC before every write so the on-disk copy is always consistent.
+    page.computeChecksum();
     off_t offset = static_cast<off_t>(page_id) * PAGE_SIZE;
     pwrite_all(fd_, page.rawBytes(), PAGE_SIZE, offset);
 }

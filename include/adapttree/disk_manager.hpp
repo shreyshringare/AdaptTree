@@ -40,8 +40,9 @@ public:
     // Read page `page_id` from disk into `page.rawBytes()`. (DISK-01, DISK-04)
     void readPage(uint32_t page_id, Page& page);
 
-    // Write `page.rawBytes()` to disk at page `page_id`. (DISK-01, DISK-04)
-    void writePage(uint32_t page_id, const Page& page);
+    // Write `page.rawBytes()` to disk at page `page_id`.
+    // Stamps CRC32 into the page header before writing. (DISK-01, DISK-04, T01)
+    void writePage(uint32_t page_id, Page& page);
 
     // Call fdatasync on the file descriptor. (DISK-03)
     void flush();

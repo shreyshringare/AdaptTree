@@ -10,12 +10,26 @@
 #include <span>
 #include <string>
 #include <unordered_map>
+#include <stdexcept>
 #include <vector>
 
 namespace adapttree {
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 inline constexpr size_t   PAGE_SIZE       = 4096;
+
+// ── CRC32 helper (IEEE 802.3, no page.hpp dependency) ─────────────────────────
+// Covers the page body bytes [32..PAGE_SIZE).  CRC stored at bytes [4..7].
+// T01: stamped on every eviction, verified on every load.
+inline uint32_t bp_crc32(const std::byte* data, size_t len) noexcept {
+    uint32_t crc = 0xFFFF'FFFFu;
+    for (size_t i = 0; i < len; ++i) {
+        crc ^= static_cast<uint8_t>(data[i]);
+        for (int b = 0; b < 8; ++b)
+            crc = (crc >> 1) ^ (0xEDB8'8320u & -(crc & 1u));
+    }
+    return crc ^ 0xFFFF'FFFFu;
+}
 inline constexpr uint32_t INVALID_PAGE_ID = std::numeric_limits<uint32_t>::max();
 
 using page_id_t = uint32_t;
@@ -190,6 +204,9 @@ void BufferPool<WAL>::evictFrame(Frame* frame) {
 
     if (frame->dirty) {
         wal_->flush_to(frame->page_lsn);
+        // T01: stamp CRC into header bytes [4..7] before writing to disk.
+        uint32_t crc = bp_crc32(frame->data + 32, PAGE_SIZE - 32);
+        std::memcpy(frame->data + 4, &crc, sizeof(crc));
         dm_->writePage(frame->page_id, frame->data);
     }
     page_table_.erase(frame->page_id);
@@ -209,6 +226,17 @@ Frame* BufferPool<WAL>::pinFrame(page_id_t page_id) {
     if (!f) return nullptr;
     evictFrame(f);
     if (!dm_->readPage(page_id, f->data)) return nullptr;
+    // T01: verify CRC after load; skip if stored CRC is 0 (freshly allocated page).
+    {
+        uint32_t stored;
+        std::memcpy(&stored, f->data + 4, sizeof(stored));
+        if (stored != 0) {
+            uint32_t computed = bp_crc32(f->data + 32, PAGE_SIZE - 32);
+            if (computed != stored)
+                throw std::runtime_error("BufferPool: CRC32 mismatch on page " +
+                                         std::to_string(page_id));
+        }
+    }
     f->page_id   = page_id;
     f->pin_count = 1;
     f->dirty     = false;

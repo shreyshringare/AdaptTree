@@ -111,9 +111,10 @@ TEST_F(DiskManagerTest, CorruptionDetectedAfterRead) {
     ::pwrite(fd, &garbage, 1, corrupt_offset);
     ::close(fd);
 
+    // T01: readPage now throws std::runtime_error on CRC mismatch instead of
+    // silently returning a corrupted page.
     adapttree::Page corrupted;
-    dm.readPage(id, corrupted);
-    EXPECT_FALSE(corrupted.verifyChecksum());
+    EXPECT_THROW(dm.readPage(id, corrupted), std::runtime_error);
 }
 
 TEST_F(DiskManagerTest, MultiplePages_AllRoundTripCorrectly) {
