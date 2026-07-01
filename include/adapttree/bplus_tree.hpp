@@ -193,23 +193,6 @@ private:
     int findChildIndex(const InternalNode* node, uint64_t search_key) const;
 
     // ── Split helpers ─────────────────────────────────────────────────────────
-    // split_leaf: called when a leaf is full after inserting (key, value).
-    // Splits leaf_page_id into two halves.  Left half keeps SPLIT_HALF entries.
-    // Right half gets the remaining entries.
-    // *fence_key_out  — smallest key in the right node (pushed up to parent)
-    // *right_page_id_out — page ID of the newly allocated right sibling
-    bool split_leaf(uint32_t  leaf_page_id,
-                    uint64_t* fence_key_out,
-                    uint32_t* right_page_id_out);
-
-    // split_internal: called when an internal node overflows.
-    // Middle key is pushed up; right child gets keys after the middle.
-    // *push_up_key_out  — the key to insert into the grandparent
-    // *right_page_id_out — new right internal node
-    bool split_internal(uint32_t  node_page_id,
-                        uint64_t* push_up_key_out,
-                        uint32_t* right_page_id_out);
-
     // insert_into_parent: after a split, insert (fence_key, right_child_id) into
     // the parent of left_child_id.  Creates a new root if path is empty.
     bool insert_into_parent(const std::vector<uint32_t>& path,
