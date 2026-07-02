@@ -19,6 +19,7 @@ FetchContent_MakeAvailable(googletest)
 add_library(adapttree STATIC
   src/page.cpp
   src/disk_manager.cpp
+  src/wal.cpp
 )
 target_include_directories(adapttree PUBLIC include)
 target_compile_features(adapttree PUBLIC cxx_std_20)
