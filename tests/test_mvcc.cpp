@@ -84,39 +84,46 @@ TEST(MVCC, MultipleVersionsChronologicalWalk) {
     MVCC mvcc;
 
     // Set up archived versions for (page=3, slot=0):
-    // v1: committed at ts=1, value=10
-    // v2: committed at ts=2, value=20
-    mvcc.archive_version(3, 0, 10, 1);
-    mvcc.archive_version(3, 0, 20, 2);
+    // v1: value=10, commit_ts=5
+    // v2: value=20, commit_ts=10
+    // These use explicit commit timestamps that don't depend on the counter.
+    mvcc.archive_version(3, 0, 10, 5);
+    mvcc.archive_version(3, 0, 20, 10);
 
-    // Inline has value=30 with commit_ts=10 (e.g. from a writer with txn_id=10)
-    // We need a reader whose read_ts is between 2 and 10
-    // Begin transactions to get the counter past 2 but below 10:
-    // Force counter to a known position by starting/committing txns
-    // The counter started at 1. After archive calls (no counter change),
-    // we begin a reader now. The reader's txn_id will be some value > 2.
-    // We need current_commit_ts=10 to be ABOVE the reader's read_ts.
-    // Strategy: begin reader first, then use a high commit_ts for inline.
+    // Reader begins here; next_txn_id_ starts at 1, so txn_r.read_ts = 1.
+    // That would be < 5, so neither old version is visible. We need the reader's
+    // read_ts to land between commit_ts=10 and commit_ts=50 (inline).
+    // Advance the counter past 10 by doing begin+commit pairs, then begin reader.
+    for (int i = 0; i < 10; ++i) {
+        Transaction d = mvcc.begin();
+        mvcc.commit(d); // each pair advances counter by 2
+    }
 
-    Transaction txn_r = mvcc.begin(); // read_ts = R (currently small, < 10)
+    Transaction txn_r = mvcc.begin(); // read_ts = R (counter is now ~21, definitely > 10)
 
-    // Inline slot: value=30, commit_ts=10 — simulating a writer with txn_id=10
-    // Since R < 10, inline is NOT visible; we should see v2 (newest <= R)
+    // Inline: value=30, commit_ts=50 (above R) — not visible
     auto result1 = mvcc.read_version(txn_r, 3, 0,
                                      /*current_value=*/30,
-                                     /*current_commit_ts=*/100); // large, definitely > R
+                                     /*current_commit_ts=*/50);
 
-    // Should see v2 (commit_ts=2 <= R, and it's the newest archived version <= R)
+    // Should see v2 (commit_ts=10 <= R, newest archived version <= R)
     EXPECT_EQ(result1, std::optional<uint64_t>{20});
 
-    // Now begin a new reader AFTER committing txn_r, so read_ts > 100
+    // Commit reader and begin new reader whose read_ts is > 50
     mvcc.commit(txn_r);
-    Transaction txn_r2 = mvcc.begin(); // read_ts = R2
+    // Advance counter past 50 if needed — commit gave txn_r a write_ts.
+    // After 10 pairs + begin + commit, counter is ~22 + 1 (write_ts from commit) = ~23.
+    // That's still < 50. Advance more.
+    for (int i = 0; i < 20; ++i) {
+        Transaction d = mvcc.begin();
+        mvcc.commit(d);
+    }
+    Transaction txn_r2 = mvcc.begin(); // read_ts = R2 (counter now ~63, > 50)
 
-    // Inline commit_ts=100 is now <= R2, so inline is visible
+    // Inline commit_ts=50 <= R2, so inline IS visible
     auto result2 = mvcc.read_version(txn_r2, 3, 0,
                                      /*current_value=*/30,
-                                     /*current_commit_ts=*/100);
+                                     /*current_commit_ts=*/50);
 
     EXPECT_EQ(result2, std::optional<uint64_t>{30});
 }
