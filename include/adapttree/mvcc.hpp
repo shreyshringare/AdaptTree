@@ -63,3 +63,10 @@ private:
 };
 
 } // namespace adapttree
+
+// ── NullMvcc — no-op test seam for B+ tree structural tests ──────────────────
+// Satisfies the MVCC duck-type contract without version tracking overhead.
+struct NullMvcc {
+    uint64_t begin() const { return 1; }
+    bool is_visible(uint64_t /*commit_ts*/, uint64_t /*read_ts*/) const { return true; }
+};
