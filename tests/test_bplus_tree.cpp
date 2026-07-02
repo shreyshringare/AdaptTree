@@ -438,9 +438,9 @@ TEST_F(BPlusTreeTest, T4_DeleteTriggerRedistribute) {
         }
     }
 
-    // scan(1, 202) should yield all 200 survivors in order
+    // scan(1, 201) should yield all 200 survivors in order
     std::vector<uint64_t> scanned;
-    auto it = tree_->scan(1, 202);
+    auto it = tree_->scan(1, 201);
     while (it.valid()) {
         scanned.push_back(it.key());
         it.next();
@@ -516,7 +516,7 @@ TEST_F(BPlusTreeTest, T7_ScanEmptyRange) {
     ASSERT_TRUE(tree_->insert(20, 200));
     ASSERT_TRUE(tree_->insert(30, 300));
 
-    auto it = tree_->scan(5, 9);  // [5,9) — no keys in this range
+    auto it = tree_->scan(5, 9);  // [5,9] — no keys in this range
     EXPECT_FALSE(it.valid());
 }
 
@@ -526,9 +526,9 @@ TEST_F(BPlusTreeTest, T8_ScanSinglePage) {
         ASSERT_TRUE(tree_->insert(k, k * 2));
     }
 
-    // scan(10, 31) yields keys 10,11,...,30 (21 keys)
+    // scan(10, 30) yields keys 10,11,...,30 (21 keys)
     std::vector<uint64_t> scanned;
-    auto it = tree_->scan(10, 31);
+    auto it = tree_->scan(10, 30);
     while (it.valid()) {
         scanned.push_back(it.key());
         it.next();
@@ -546,9 +546,9 @@ TEST_F(BPlusTreeTest, T9_ScanMultiPage) {
         ASSERT_TRUE(tree_->insert(k, k));
     }
 
-    // scan(95, 306) yields keys 95..305 (211 keys)
+    // scan(95, 305) yields keys 95..305 (211 keys)
     std::vector<uint64_t> scanned;
-    auto it = tree_->scan(95, 306);
+    auto it = tree_->scan(95, 305);
     while (it.valid()) {
         scanned.push_back(it.key());
         it.next();

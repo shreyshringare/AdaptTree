@@ -1188,11 +1188,11 @@ void BPlusTree<WAL_T, MVCC_T>::Iterator::advance_to_next_valid()
         const auto* leaf = reinterpret_cast<const LeafNode*>(g->data());
         int n = static_cast<int>(leaf->header.num_slots);
         if (slot_idx_ < n) {
-            if (leaf->entries[slot_idx_].key < hi_) {
+            if (leaf->entries[slot_idx_].key <= hi_) {
                 valid_ = true;
                 return;
             } else {
-                // All remaining entries in this and future leaves are >= hi_
+                // All remaining entries in this and future leaves are > hi_
                 valid_ = false;
                 return;
             }

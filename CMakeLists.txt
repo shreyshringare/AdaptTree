@@ -34,20 +34,19 @@ add_library(pgm_builder STATIC src/pgm_builder.cpp)
 target_include_directories(pgm_builder PUBLIC include)
 target_compile_features(pgm_builder PUBLIC cxx_std_20)
 
-# Google Benchmark — disable GTest integration to avoid duplicate target conflicts
-set(BENCHMARK_ENABLE_TESTING OFF CACHE BOOL "" FORCE)
-set(BENCHMARK_ENABLE_GTEST_TESTS OFF CACHE BOOL "" FORCE)
-FetchContent_Declare(
-  benchmark
-  GIT_REPOSITORY https://github.com/google/benchmark.git
-  GIT_TAG        v1.8.3
-)
-FetchContent_MakeAvailable(benchmark)
-
 add_subdirectory(tests)
 
 option(ADAPTTREE_BENCH "Build benchmark harness" OFF)
 if(ADAPTTREE_BENCH)
+  # Google Benchmark — disable GTest integration to avoid duplicate target conflicts
+  set(BENCHMARK_ENABLE_TESTING OFF CACHE BOOL "" FORCE)
+  set(BENCHMARK_ENABLE_GTEST_TESTS OFF CACHE BOOL "" FORCE)
+  FetchContent_Declare(
+    benchmark
+    GIT_REPOSITORY https://github.com/google/benchmark.git
+    GIT_TAG        v1.8.3
+  )
+  FetchContent_MakeAvailable(benchmark)
   add_subdirectory(bench)
 endif()
 
