@@ -412,3 +412,49 @@ TEST(MvccIntegration, AbortDoesNotCommitVersion) {
     mvcc.commit(txn_r);
     EXPECT_EQ(mvcc.oldest_active_read_ts(), UINT64_MAX);
 }
+
+// ---------------------------------------------------------------------------
+// Cycle 9 — Edge Cases
+// ---------------------------------------------------------------------------
+
+TEST(MvccEdgeCases, GC_EmptyOldVersionsNoOp) {
+    MVCC mvcc;
+    // No archived versions, no active readers.  gc() must not throw.
+    EXPECT_NO_THROW(mvcc.gc());
+}
+
+TEST(MvccEdgeCases, ReadVersion_NoOldVersions_InlineOnly) {
+    MVCC mvcc;
+
+    // No archived versions for (page=99, slot=0).
+
+    // Reader with read_ts=1; inline commit_ts=1 <= 1 → inline IS visible.
+    Transaction txn1 = mvcc.begin();  // read_ts = 1
+    auto r1 = mvcc.read_version(txn1, 99, 0, 7, 1);
+    EXPECT_TRUE(r1.has_value());
+    EXPECT_EQ(r1.value(), 7ULL);
+    mvcc.commit(txn1);
+
+    // Fresh MVCC: reader with read_ts=1; inline commit_ts=5 > 1 → not visible.
+    // No old versions → nullopt.
+    MVCC mvcc2;
+    Transaction txn_early = mvcc2.begin();  // read_ts = 1
+    auto r2 = mvcc2.read_version(txn_early, 99, 0, 7, 5);
+    EXPECT_FALSE(r2.has_value());
+    mvcc2.commit(txn_early);
+}
+
+TEST(MvccEdgeCases, TxnId_Zero_IsReserved) {
+    MVCC mvcc;
+    // next_txn_id_ starts at 1; txn_id 0 must never be issued.
+    Transaction t1 = mvcc.begin();
+    EXPECT_NE(t1.txn_id, 0ULL);
+    EXPECT_GE(t1.txn_id, 1ULL);
+
+    Transaction t2 = mvcc.begin();
+    EXPECT_NE(t2.txn_id, 0ULL);
+    EXPECT_GT(t2.txn_id, t1.txn_id);
+
+    mvcc.commit(t1);
+    mvcc.abort(t2);
+}
