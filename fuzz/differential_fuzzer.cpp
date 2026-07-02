@@ -15,10 +15,13 @@
 
 // ── Wire format constants ──────────────────────────────────────────────────────
 // Each operation is exactly 17 bytes: op_type(1) | key(8 LE) | value(8 LE)
+// For kOpDelete, value bytes are ignored.
+// For kOpFullScan, key and value bytes are ignored.
 static constexpr size_t  kOpSize      = 17;
 static constexpr uint8_t kOpInsert    = 0x01;
 static constexpr uint8_t kOpGet       = 0x02;
 static constexpr uint8_t kOpFullScan  = 0x03;
+static constexpr uint8_t kOpDelete    = 0x04;
 
 // ── LLVMFuzzerTestOneInput ────────────────────────────────────────────────────
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
@@ -138,16 +141,53 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
                 abort();
             }
 
+        } else if (op == kOpDelete) {
+            // ── AdaptTree delete ───────────────────────────────────────────────
+            // Only delete keys we previously inserted to avoid semantic divergence
+            // (AdaptTree returns false for missing keys; SQLite returns 0 rows deleted
+            // with no error — comparing these is fragile).
+            if (!inserted_keys.count(key)) {
+                continue;
+            }
+
+            bool adapt_ok = tree.remove(key);
+
+            // ── SQLite delete ──────────────────────────────────────────────────
+            sqlite3_stmt* del_stmt = nullptr;
+            sqlite3_prepare_v2(db, "DELETE FROM kv WHERE k = ?", -1,
+                               &del_stmt, nullptr);
+            sqlite3_bind_int64(del_stmt, 1, static_cast<int64_t>(key));
+            int rc = sqlite3_step(del_stmt);
+            sqlite3_finalize(del_stmt);
+            bool sqlite_ok = (rc == SQLITE_DONE);
+            int sqlite_changes = sqlite3_changes(db);
+
+            // ── Divergence check ───────────────────────────────────────────────
+            if (!adapt_ok) {
+                fprintf(stderr,
+                    "[DIVERGENCE] op=DELETE key=%llu: AdaptTree returned false "
+                    "but key was in inserted_keys (SQLite changes=%d)\n",
+                    (unsigned long long)key, sqlite_changes);
+                abort();
+            }
+            if (sqlite_changes == 0) {
+                fprintf(stderr,
+                    "[DIVERGENCE] op=DELETE key=%llu: SQLite deleted 0 rows "
+                    "but key was in inserted_keys\n",
+                    (unsigned long long)key);
+                abort();
+            }
+
+            inserted_keys.erase(key);
+
         } else if (op == kOpFullScan) {
-            // ── Phase 4 FULL_SCAN uses point-query enumeration over inserted_keys ──
-            // Since range-scan iterator is not built until Phase 5, we enumerate
-            // all inserted keys via point queries and collect results into a map.
-            // Phase 5 will replace this with scan(UINT64_MIN, UINT64_MAX).
+            // ── Phase 5 FULL_SCAN uses real scan() iterator ───────────────────
             std::map<uint64_t, uint64_t> adapt_map;
-            for (uint64_t k : inserted_keys) {
-                auto v = tree.get(k);
-                if (v.has_value()) {
-                    adapt_map[k] = v.value();
+            {
+                auto it = tree.scan(0, UINT64_MAX);
+                while (it.valid()) {
+                    adapt_map[it.key()] = it.value();
+                    it.next();
                 }
             }
 
