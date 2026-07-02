@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cstdlib>   // std::abs
 #include <cstring>
 
 namespace adapttree {
@@ -51,6 +52,78 @@ BPlusTree<WAL_T>::BPlusTree(BufferPool<WAL_T>& pool, WAL_T& wal)
         }
     }
     // else: existing database — meta page already correct in pool
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Learned index helpers (Phase 9)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// fullBinarySearchOpt: standard binary search returning optional slot index.
+template <typename WAL_T>
+std::optional<uint32_t>
+BPlusTree<WAL_T>::fullBinarySearchOpt(const LeafNode* leaf, uint64_t key) const
+{
+    int n = static_cast<int>(leaf->header.num_slots);
+    int lo = 0, hi = n;
+    while (lo < hi) {
+        int mid = lo + (hi - lo) / 2;
+        if      (leaf->entries[mid].key < key) lo = mid + 1;
+        else if (leaf->entries[mid].key > key) hi = mid;
+        else return static_cast<uint32_t>(mid);
+    }
+    return std::nullopt;
+}
+
+// boundedBinarySearch: binary search restricted to slot range [lo, hi] inclusive.
+template <typename WAL_T>
+std::optional<uint32_t>
+BPlusTree<WAL_T>::boundedBinarySearch(const LeafNode* leaf, uint64_t key,
+                                       uint32_t lo, uint32_t hi) const
+{
+    if (lo > hi) return std::nullopt;
+    int ilo = static_cast<int>(lo);
+    int ihi = static_cast<int>(hi) + 1;  // half-open upper bound
+    while (ilo < ihi) {
+        int mid = ilo + (ihi - ilo) / 2;
+        if      (leaf->entries[mid].key < key) ilo = mid + 1;
+        else if (leaf->entries[mid].key > key) ihi = mid;
+        else return static_cast<uint32_t>(mid);
+    }
+    return std::nullopt;
+}
+
+// findSlotLearned: dispatch between model-guided bounded search and full search.
+template <typename WAL_T>
+std::optional<uint32_t>
+BPlusTree<WAL_T>::findSlotLearned(const LeafNode* leaf, uint64_t key) const
+{
+    // Gate 1: learned index disabled or no model fitted yet
+    if (!use_learned_index_ || !leaf->model.has_model) {
+        return fullBinarySearchOpt(leaf, key);
+    }
+
+    // Gate 2: stale model — too many inserts since last rebuild
+    if (leaf->model.inserts_since_model_rebuild > kModelRebuildThreshold) {
+        fallback_count_.fetch_add(1, std::memory_order_relaxed);
+        return fullBinarySearchOpt(leaf, key);
+    }
+
+    // Use model: predict slot, clamp window to valid range
+    const LearnedSegment& seg = leaf->model.learnedSegment();
+    uint32_t ns   = static_cast<uint32_t>(leaf->header.num_slots);
+    uint32_t pred = seg.predict(key, ns);
+
+    static constexpr uint32_t kEpsilon = 4;
+    uint32_t lo = (pred >= kEpsilon) ? (pred - kEpsilon) : 0u;
+    uint32_t hi = std::min(pred + kEpsilon, ns > 0 ? ns - 1 : 0u);
+
+    auto result = boundedBinarySearch(leaf, key, lo, hi);
+    if (!result) {
+        // Window miss — fall back to full search
+        fallback_count_.fetch_add(1, std::memory_order_relaxed);
+        return fullBinarySearchOpt(leaf, key);
+    }
+    return result;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -178,6 +251,12 @@ std::optional<uint64_t> BPlusTree<WAL_T>::get(uint64_t key)
     if (!g) return std::nullopt;
     const auto* leaf = reinterpret_cast<const LeafNode*>(g->data());
 
+    // Use learned index path if enabled; otherwise fall back to traditional binary search.
+    if (use_learned_index_) {
+        auto opt_idx = findSlotLearned(leaf, key);
+        if (!opt_idx) return std::nullopt;
+        return leaf->entries[*opt_idx].value;
+    }
     int idx = findSlotInLeaf(leaf, key);
     if (idx < 0) return std::nullopt;
     return leaf->entries[idx].value;
@@ -381,6 +460,11 @@ bool BPlusTree<WAL_T>::insert(uint64_t key, uint64_t value)
             leaf->entries[insert_pos] = {key, value};
             leaf->header.num_slots    = static_cast<uint16_t>(n + 1);
             leaf->header.lsn          = lsn;
+            // LEARN-05: track staleness; saturate at UINT16_MAX
+            if (leaf->model.has_model &&
+                leaf->model.inserts_since_model_rebuild < UINT16_MAX) {
+                ++leaf->model.inserts_since_model_rebuild;
+            }
             leaf_g->markDirty();
             return true;
         }
@@ -411,6 +495,21 @@ bool BPlusTree<WAL_T>::insert(uint64_t key, uint64_t value)
         { WalRecord _r; _r.txn_id = next_txn_id_.fetch_add(1, std::memory_order_relaxed); _r.record_type = WalRecordType::INSERT; _r.page_id = leaf_id; _r.redo_len = 0; _r.undo_len = 0; leaf->header.lsn = wal_.append(_r); }
         std::memcpy(leaf->entries, all_entries, SPLIT_HALF * sizeof(LeafEntry));
         leaf->header.num_slots    = static_cast<uint16_t>(SPLIT_HALF);
+        // LEARN-02: fit a learned model for the left child immediately after split.
+        // Model bytes are in place before markDirty() so the dirty page image carries them.
+        {
+            std::vector<KeyPos> left_kp;
+            left_kp.reserve(SPLIT_HALF);
+            for (uint32_t i = 0; i < SPLIT_HALF; ++i) {
+                left_kp.push_back({all_entries[i].key, i});
+            }
+            auto left_segs = pgm_builder_.fit(left_kp);
+            if (!left_segs.empty()) {
+                leaf->model.learnedSegmentMut() = left_segs[0];
+                leaf->model.has_model                   = 1;
+                leaf->model.inserts_since_model_rebuild = 0;
+            }
+        }
         leaf_g->markDirty();
 
         uint32_t old_next = leaf->header.next_leaf_id;
@@ -455,6 +554,21 @@ bool BPlusTree<WAL_T>::insert(uint64_t key, uint64_t value)
         std::memcpy(right->entries,
                     &all_entries[SPLIT_HALF],
                     (ORDER + 1 - SPLIT_HALF) * sizeof(LeafEntry));
+        // LEARN-02: fit a learned model for the right child.
+        {
+            uint32_t right_count = ORDER + 1 - SPLIT_HALF;
+            std::vector<KeyPos> right_kp;
+            right_kp.reserve(right_count);
+            for (uint32_t i = 0; i < right_count; ++i) {
+                right_kp.push_back({all_entries[SPLIT_HALF + i].key, i});
+            }
+            auto right_segs = pgm_builder_.fit(right_kp);
+            if (!right_segs.empty()) {
+                right->model.learnedSegmentMut() = right_segs[0];
+                right->model.has_model                   = 1;
+                right->model.inserts_since_model_rebuild = 0;
+            }
+        }
         right_g->markDirty();
 
         // Update left leaf's next_leaf_id → right_id

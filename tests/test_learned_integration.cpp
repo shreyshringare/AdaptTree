@@ -90,9 +90,9 @@ protected:
     };
 
     // Helper: return path to a temp db file unique per test.
+    // Use /tmp so tests run on the Linux filesystem under WSL2 (NTFS is too slow).
     static std::string tmp_db(const std::string& suffix) {
-        // Use a simple path in the current directory; cleaned up at TearDown.
-        return "test_learned_" + suffix + ".db";
+        return "/tmp/test_learned_" + suffix + ".db";
     }
 };
 
