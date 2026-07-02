@@ -51,3 +51,13 @@ target_include_directories(test_learned_integration PRIVATE ../include)
 target_link_libraries(test_learned_integration PRIVATE pgm_builder GTest::gtest_main)
 target_compile_features(test_learned_integration PRIVATE cxx_std_20)
 gtest_discover_tests(test_learned_integration)
+
+add_executable(test_learned_integration_gaps
+  test_learned_integration_gaps.cpp
+  ../src/bplus_tree.cpp
+  ../src/buffer_pool.cpp
+)
+target_include_directories(test_learned_integration_gaps PRIVATE ../include)
+target_link_libraries(test_learned_integration_gaps PRIVATE pgm_builder GTest::gtest_main)
+target_compile_features(test_learned_integration_gaps PRIVATE cxx_std_20)
+gtest_discover_tests(test_learned_integration_gaps)
