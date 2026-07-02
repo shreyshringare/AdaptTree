@@ -1,5 +1,9 @@
 #include "adapttree/mvcc.hpp"
 #include <gtest/gtest.h>
+#include <atomic>
+#include <shared_mutex>
+#include <thread>
+#include <vector>
 
 using namespace adapttree;
 
@@ -239,4 +243,52 @@ TEST(MVCC, GC_RequiresNewerVersionToExist) {
     EXPECT_EQ(result, std::optional<uint64_t>{50});
 
     mvcc.abort(active);
+}
+
+// ---------------------------------------------------------------------------
+// Cycle 6 — Epoch Ordering (MVCC-05)
+// ---------------------------------------------------------------------------
+// Proves that begin() and gc() share mvcc_mutex_, so a reader's epoch is
+// always registered before GC can advance min_read_ts.  Single-threaded
+// simulation: after begin() returns, oldest_active_read_ts() == txn.read_ts,
+// and a subsequent gc() call cannot observe a lower min_ts.
+
+TEST(MvccEpochOrdering, EpochOrdering_RegisterBeforeGCAdvances) {
+    MVCC mvcc;
+
+    // Archive two versions for (page=10, slot=0).
+    // commit_ts values are fixed constants that sit below any counter-driven
+    // read_ts so we can reason precisely about visibility.
+    mvcc.archive_version(10, 0, 42, 1);
+    mvcc.archive_version(10, 0, 77, 3);
+
+    // Reader begins — read_ts = R (next_txn_id_ starts at 1, so R = 1).
+    Transaction txn_r = mvcc.begin();
+    uint64_t R = txn_r.read_ts;
+
+    // Immediately after begin(), the epoch MUST be registered.
+    EXPECT_EQ(mvcc.oldest_active_read_ts(), R);
+
+    // GC runs while the reader is still active.
+    // min_ts = R = 1.
+    // old_versions for (10,0): [(42, commit_ts=1), (77, commit_ts=3)]
+    // Scan front: commit_ts=1 < min_ts=1? NO (strict less-than, 1 < 1 is false).
+    // Nothing removed — both entries retained.
+    mvcc.gc();
+
+    // Reader's epoch is still the oldest.
+    EXPECT_EQ(mvcc.oldest_active_read_ts(), R);
+
+    // Reader reads: inline (value=200, commit_ts=15).
+    // 15 > R=1 → not visible via inline.
+    // Walk old_versions newest-first: (77, commit_ts=3) → 3 > 1 → skip.
+    //                                  (42, commit_ts=1) → 1 <= 1 → VISIBLE.
+    auto result = mvcc.read_version(txn_r, 10, 0, 200, 15);
+    EXPECT_TRUE(result.has_value());
+    EXPECT_EQ(result.value(), 42ULL);
+
+    mvcc.commit(txn_r);
+
+    // Once the only reader commits, no active readers remain.
+    EXPECT_EQ(mvcc.oldest_active_read_ts(), UINT64_MAX);
 }
