@@ -35,6 +35,7 @@ target_compile_options(differential_fuzzer PRIVATE
   -g
   -O1
   -fsanitize=fuzzer,address,undefined
+  -fno-sanitize=vptr
   -fno-omit-frame-pointer
   -fno-sanitize-recover=undefined
   -std=c++20
@@ -42,6 +43,7 @@ target_compile_options(differential_fuzzer PRIVATE
 
 target_link_options(differential_fuzzer PRIVATE
   -fsanitize=fuzzer,address,undefined
+  -fno-sanitize=vptr
 )
 
 target_include_directories(differential_fuzzer PRIVATE
