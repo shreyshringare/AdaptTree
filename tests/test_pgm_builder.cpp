@@ -39,10 +39,12 @@ TEST(PGMBuilderTest, NonLinear_EpsilonZero_ValidateThrows) {
 }
 
 TEST(PGMBuilderTest, PredictClamp) {
+    // Two points create slope=5; predict at far key overflows and must clamp to num_slots-1.
     PGMBuilder builder(4);
-    std::vector<KeyPos> pts = {{10u, 5u}};
+    std::vector<KeyPos> pts = {{0u, 0u}, {1u, 5u}};
     auto segs = builder.fit(pts);
     ASSERT_FALSE(segs.empty());
+    // slope ~= 5, intercept ~= 0; predict(9999, 10): 5*9999 >> 10 → clamped to 9
     uint32_t result = segs[0].predict(9999, 10);
     EXPECT_LT(result, 10u);
     EXPECT_EQ(result, 9u);
