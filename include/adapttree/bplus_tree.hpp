@@ -3,8 +3,10 @@
 // NOTE: Do NOT include page.hpp here — it defines PAGE_SIZE as uint32_t and
 // exports it to global scope, conflicting with buffer_pool.hpp's size_t version.
 #include "adapttree/buffer_pool.hpp"  // PAGE_SIZE (size_t), INVALID_PAGE_ID, BufferPool<WAL>
+#include "adapttree/pgm_builder.hpp"  // LearnedSegment, PGMBuilder
 #include "adapttree/wal.hpp"
 
+#include <atomic>
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
@@ -88,16 +90,56 @@ struct LeafEntry {
 };
 static_assert(sizeof(LeafEntry) == 16);
 
+// ── LeafModelArea ─────────────────────────────────────────────────────────────
+// 32-byte block embedded in every LeafNode between the header and entries.
+// Layout (byte offsets within this struct):
+//   [0]      has_model                  uint8_t  — 0 = no model, 1 = model valid
+//   [1..2]   inserts_since_model_rebuild uint16_t — saturates at UINT16_MAX
+//   [3]      _model_pad                 uint8_t  — reserved, always 0
+//   [4..31]  _seg_bytes[28]             uint8_t  — stores one LearnedSegment (<=24B)
+//
+// Accessors reinterpret _seg_bytes as LearnedSegment.
+// LearnedSegment is trivially copyable (double*2 + uint16_t = 24 bytes natural layout).
+
+#pragma pack(push, 1)
+struct LeafModelArea {
+    uint8_t  has_model                  = 0;
+    uint16_t inserts_since_model_rebuild = 0;
+    uint8_t  _model_pad                 = 0;
+    uint8_t  _seg_bytes[28]             = {};
+
+    LearnedSegment& learnedSegmentMut() noexcept {
+        return *reinterpret_cast<LearnedSegment*>(_seg_bytes);
+    }
+    const LearnedSegment& learnedSegment() const noexcept {
+        return *reinterpret_cast<const LearnedSegment*>(_seg_bytes);
+    }
+};
+#pragma pack(pop)
+
+static_assert(sizeof(LeafModelArea) == 32,
+              "LeafModelArea must be exactly 32 bytes");
+static_assert(sizeof(LearnedSegment) <= 28,
+              "LearnedSegment must fit in the 28-byte _seg_bytes region");
+
 // ── LeafNode ──────────────────────────────────────────────────────────────────
 // Occupies exactly PAGE_SIZE (4096) bytes.
 // entries[0..num_slots-1] are valid and kept in ascending key order.
-// Padding fills the remainder of the page.
+// The model area follows the 32-byte header and precedes the entry array.
+//
+// Layout:
+//   [0..31]    header  (BPHeader, 32 bytes)
+//   [32..63]   model   (LeafModelArea, 32 bytes)
+//   [64..3263] entries (LeafEntry[200], 3200 bytes)
+//   [3264..4095] _padding (832 bytes)
 struct LeafNode {
-    BPHeader  header;                           // 32 bytes
-    LeafEntry entries[ORDER];                   // 200 * 16 = 3200 bytes
-    uint8_t   _padding[PAGE_SIZE
-                        - sizeof(BPHeader)
-                        - ORDER * sizeof(LeafEntry)];  // 864 bytes
+    BPHeader      header;                       // 32 bytes
+    LeafModelArea model;                        // 32 bytes (LEARN-01)
+    LeafEntry     entries[ORDER];               // 200 * 16 = 3200 bytes
+    uint8_t       _padding[PAGE_SIZE
+                            - sizeof(BPHeader)
+                            - sizeof(LeafModelArea)
+                            - ORDER * sizeof(LeafEntry)];  // 832 bytes
 };
 static_assert(sizeof(LeafNode) == PAGE_SIZE,
               "LeafNode must be exactly PAGE_SIZE bytes");
@@ -165,6 +207,19 @@ public:
     // Return the current height of the tree (1 means the root is a leaf node).
     uint32_t height();
 
+    // ── Learned index controls ────────────────────────────────────────────────
+    // Toggle: when true, get() uses findSlotInLeaf with bounded model search.
+    // When false (default), falls back to traditional binary search.
+    bool use_learned_index_ = false;
+
+    // Counts how many times bounded search missed and full binary search was used.
+    mutable std::atomic<uint64_t> fallback_count_{0};
+
+    // findSlotInLeaf (new learned-index overload):
+    // Returns the slot index of `key` in the leaf, or std::nullopt if not found.
+    // Uses the learned segment when use_learned_index_=true and model is fresh.
+    std::optional<uint32_t> findSlotLearned(const LeafNode* leaf, uint64_t key) const;
+
     // Remove key from the tree.  Returns true if the key was found and removed,
     // false if the key did not exist.  May trigger leaf redistribution, leaf merge,
     // internal-node underflow propagation, and root collapse.
@@ -205,10 +260,29 @@ private:
     WAL_T&             wal_;
     std::atomic<uint64_t> next_txn_id_{1};
 
+    // Learned index — epsilon=4 per LEARN-01 (RESEARCH.md)
+    PGMBuilder pgm_builder_{4};
+
+    // Stale-model threshold: when inserts_since_model_rebuild exceeds this
+    // value, findSlotLearned falls back to full binary search.
+    static constexpr uint16_t kModelRebuildThreshold = 50;
+
     // ── Meta helpers ──────────────────────────────────────────────────────────
     uint32_t root_page_id();
     void     set_root_page_id(uint32_t new_root_id);
     void     set_height(uint32_t h);
+
+    // ── Learned index helpers ─────────────────────────────────────────────────
+    // boundedBinarySearch: binary search restricted to slot range [lo, hi].
+    // Returns the slot index if found, nullopt if not found in window.
+    std::optional<uint32_t> boundedBinarySearch(const LeafNode* leaf,
+                                                 uint64_t key,
+                                                 uint32_t lo,
+                                                 uint32_t hi) const;
+
+    // fullBinarySearchOpt: standard binary search returning optional slot index.
+    std::optional<uint32_t> fullBinarySearchOpt(const LeafNode* leaf,
+                                                 uint64_t key) const;
 
     // ── Traversal helpers ─────────────────────────────────────────────────────
     // findLeaf: descend the tree from root to the leaf that should contain key.
