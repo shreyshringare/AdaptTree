@@ -37,3 +37,7 @@ gtest_discover_tests(wal_tests)
 add_executable(test_mvcc test_mvcc.cpp)
 target_link_libraries(test_mvcc PRIVATE mvcc GTest::gtest_main)
 gtest_discover_tests(test_mvcc)
+
+add_executable(pgm_builder_tests test_pgm_builder.cpp)
+target_link_libraries(pgm_builder_tests PRIVATE pgm_builder GTest::gtest_main)
+gtest_discover_tests(pgm_builder_tests)

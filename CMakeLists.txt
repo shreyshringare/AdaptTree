@@ -29,6 +29,11 @@ add_library(mvcc STATIC src/mvcc.cpp)
 target_include_directories(mvcc PUBLIC include)
 target_compile_features(mvcc PUBLIC cxx_std_20)
 
+# ── PGM Builder (isolated, no dependency on adapttree tree layer) ──────────
+add_library(pgm_builder STATIC src/pgm_builder.cpp)
+target_include_directories(pgm_builder PUBLIC include)
+target_compile_features(pgm_builder PUBLIC cxx_std_20)
+
 add_subdirectory(tests)
 
 option(ADAPTTREE_FUZZING "Build differential fuzzer (requires Clang + libFuzzer)" OFF)
