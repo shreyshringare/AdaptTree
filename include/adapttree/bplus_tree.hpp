@@ -17,6 +17,24 @@
 
 namespace adapttree {
 
+// ── TrivialMvcc — no-op MVCC seam for single-threaded use ────────────────────
+// Passes commit_ts=0 for all operations (no per-slot version tracking).
+// For full snapshot isolation, LeafEntry must store commit_ts alongside value.
+struct TrivialMvcc {
+    struct Txn { uint64_t txn_id = 1; uint64_t read_ts = UINT64_MAX; };
+    Txn  begin()                    { return {}; }
+    void commit(Txn&)               {}
+    void abort(Txn&)                {}
+    void archive_version(uint64_t /*page_id*/, uint32_t /*slot_idx*/,
+                         uint64_t /*old_value*/, uint64_t /*commit_ts*/) {}
+    std::optional<uint64_t> read_version(const Txn& /*txn*/, uint64_t /*page_id*/,
+                                         uint32_t /*slot_idx*/, uint64_t current_value,
+                                         uint64_t /*current_commit_ts*/) const {
+        return current_value;  // always visible
+    }
+    void gc() {}
+};
+
 // ── B+ Tree constants ─────────────────────────────────────────────────────────
 // ORDER is the maximum number of entries in a leaf node and the maximum number
 // of keys in an internal node (which has ORDER+1 children).
@@ -191,14 +209,17 @@ static_assert(sizeof(MetaPage) == PAGE_SIZE,
 // The tree does not perform any logging beyond calling wal_.append() to obtain
 // an LSN for each newly dirtied page.
 
-template <typename WAL_T>
+template <typename WAL_T, typename MVCC_T = TrivialMvcc>
 class BPlusTree {
 public:
     // Construct (or open) a B+ tree backed by `pool`.
     // On a fresh database the constructor allocates page 0 (meta) and page 1
     // (the initial empty root leaf).  On an existing database it trusts the
     // meta page already present in the pool.
+    // Constructor without MVCC — uses internal TrivialMvcc (backward compat).
     explicit BPlusTree(BufferPool<WAL_T>& pool, WAL_T& wal);
+    // Constructor with external MVCC instance.
+    BPlusTree(BufferPool<WAL_T>& pool, WAL_T& wal, MVCC_T& mvcc);
 
     // Insert (key, value).  Returns false if key already exists.
     // May trigger one or more page splits; amortised O(log n) buffer-pool round trips.
@@ -241,8 +262,8 @@ public:
         void     next();
 
     private:
-        friend class BPlusTree<WAL_T>;
-        BPlusTree<WAL_T>* tree_;
+        friend class BPlusTree<WAL_T, MVCC_T>;
+        BPlusTree<WAL_T, MVCC_T>* tree_;
         uint32_t          current_leaf_id_;
         int               slot_idx_;
         uint64_t          hi_;
@@ -261,6 +282,8 @@ public:
 private:
     BufferPool<WAL_T>& pool_;
     WAL_T&             wal_;
+    MVCC_T             trivial_mvcc_{};   // used when no external MVCC provided
+    MVCC_T&            mvcc_;             // reference — either trivial_mvcc_ or external
     std::atomic<uint64_t> next_txn_id_{1};
 
     // Learned index — epsilon=4 per LEARN-01 (RESEARCH.md)

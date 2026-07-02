@@ -11,9 +11,9 @@ namespace adapttree {
 // Constructor
 // ─────────────────────────────────────────────────────────────────────────────
 
-template <typename WAL_T>
-BPlusTree<WAL_T>::BPlusTree(BufferPool<WAL_T>& pool, WAL_T& wal)
-    : pool_(pool), wal_(wal)
+template <typename WAL_T, typename MVCC_T>
+BPlusTree<WAL_T, MVCC_T>::BPlusTree(BufferPool<WAL_T>& pool, WAL_T& wal)
+    : pool_(pool), wal_(wal), trivial_mvcc_{}, mvcc_(trivial_mvcc_)
 {
     auto meta_opt = pool_.fetchPage(META_PAGE_ID);
     if (!meta_opt) {
@@ -54,14 +54,55 @@ BPlusTree<WAL_T>::BPlusTree(BufferPool<WAL_T>& pool, WAL_T& wal)
     // else: existing database — meta page already correct in pool
 }
 
+template <typename WAL_T, typename MVCC_T>
+BPlusTree<WAL_T, MVCC_T>::BPlusTree(BufferPool<WAL_T>& pool, WAL_T& wal, MVCC_T& mvcc)
+    : pool_(pool), wal_(wal), trivial_mvcc_{}, mvcc_(mvcc)
+{
+    auto meta_opt = pool_.fetchPage(META_PAGE_ID);
+    if (!meta_opt) {
+        {
+            auto meta_g = pool_.newPage();
+            assert(meta_g.has_value());
+            assert(meta_g->page_id() == META_PAGE_ID);
+            auto* meta             = reinterpret_cast<MetaPage*>(meta_g->data());
+            meta->header.page_id      = META_PAGE_ID;
+            meta->header.page_type    = PageType::META;
+            meta->header.num_slots    = 0;
+            meta->header.free_start   = 0;
+            meta->header.free_end     = 0;
+            meta->header.flags        = 0;
+            meta->header.next_leaf_id = INVALID_PAGE_ID;
+            { WalRecord _r; _r.record_type = WalRecordType::INSERT; _r.page_id = META_PAGE_ID; _r.redo_len = 0; _r.undo_len = 0; meta->header.lsn = wal_.append(_r); }
+            meta->tree_height         = 1;
+            meta->root_page_id        = 1;
+            meta_g->markDirty();
+        }
+        {
+            auto root_g = pool_.newPage();
+            assert(root_g.has_value());
+            assert(root_g->page_id() == uint32_t{1});
+            auto* root             = reinterpret_cast<LeafNode*>(root_g->data());
+            root->header.page_id      = root_g->page_id();
+            root->header.page_type    = PageType::LEAF;
+            root->header.num_slots    = 0;
+            root->header.free_start   = 0;
+            root->header.free_end     = 0;
+            root->header.flags        = 0;
+            root->header.next_leaf_id = INVALID_PAGE_ID;
+            { WalRecord _r; _r.record_type = WalRecordType::INSERT; _r.page_id = root_g->page_id(); _r.redo_len = 0; _r.undo_len = 0; root->header.lsn = wal_.append(_r); }
+            root_g->markDirty();
+        }
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Learned index helpers (Phase 9)
 // ─────────────────────────────────────────────────────────────────────────────
 
 // fullBinarySearchOpt: standard binary search returning optional slot index.
-template <typename WAL_T>
+template <typename WAL_T, typename MVCC_T>
 std::optional<uint32_t>
-BPlusTree<WAL_T>::fullBinarySearchOpt(const LeafNode* leaf, uint64_t key) const
+BPlusTree<WAL_T, MVCC_T>::fullBinarySearchOpt(const LeafNode* leaf, uint64_t key) const
 {
     int n = static_cast<int>(leaf->header.num_slots);
     int lo = 0, hi = n;
@@ -75,9 +116,9 @@ BPlusTree<WAL_T>::fullBinarySearchOpt(const LeafNode* leaf, uint64_t key) const
 }
 
 // boundedBinarySearch: binary search restricted to slot range [lo, hi] inclusive.
-template <typename WAL_T>
+template <typename WAL_T, typename MVCC_T>
 std::optional<uint32_t>
-BPlusTree<WAL_T>::boundedBinarySearch(const LeafNode* leaf, uint64_t key,
+BPlusTree<WAL_T, MVCC_T>::boundedBinarySearch(const LeafNode* leaf, uint64_t key,
                                        uint32_t lo, uint32_t hi) const
 {
     if (lo > hi) return std::nullopt;
@@ -93,9 +134,9 @@ BPlusTree<WAL_T>::boundedBinarySearch(const LeafNode* leaf, uint64_t key,
 }
 
 // findSlotLearned: dispatch between model-guided bounded search and full search.
-template <typename WAL_T>
+template <typename WAL_T, typename MVCC_T>
 std::optional<uint32_t>
-BPlusTree<WAL_T>::findSlotLearned(const LeafNode* leaf, uint64_t key) const
+BPlusTree<WAL_T, MVCC_T>::findSlotLearned(const LeafNode* leaf, uint64_t key) const
 {
     // Gate 1: learned index disabled or no model fitted yet
     if (!use_learned_index_ || !leaf->model.has_model) {
@@ -130,16 +171,16 @@ BPlusTree<WAL_T>::findSlotLearned(const LeafNode* leaf, uint64_t key) const
 // Meta-page helpers (each fetches the meta page, modifies, and releases)
 // ─────────────────────────────────────────────────────────────────────────────
 
-template <typename WAL_T>
-uint32_t BPlusTree<WAL_T>::root_page_id()
+template <typename WAL_T, typename MVCC_T>
+uint32_t BPlusTree<WAL_T, MVCC_T>::root_page_id()
 {
     auto g = pool_.fetchPage(META_PAGE_ID);
     assert(g.has_value());
     return reinterpret_cast<const MetaPage*>(g->data())->root_page_id;
 }
 
-template <typename WAL_T>
-void BPlusTree<WAL_T>::set_root_page_id(uint32_t new_root_id)
+template <typename WAL_T, typename MVCC_T>
+void BPlusTree<WAL_T, MVCC_T>::set_root_page_id(uint32_t new_root_id)
 {
     auto g = pool_.fetchPage(META_PAGE_ID);
     assert(g.has_value());
@@ -149,8 +190,8 @@ void BPlusTree<WAL_T>::set_root_page_id(uint32_t new_root_id)
     g->markDirty();
 }
 
-template <typename WAL_T>
-void BPlusTree<WAL_T>::set_height(uint32_t h)
+template <typename WAL_T, typename MVCC_T>
+void BPlusTree<WAL_T, MVCC_T>::set_height(uint32_t h)
 {
     auto g = pool_.fetchPage(META_PAGE_ID);
     assert(g.has_value());
@@ -160,8 +201,8 @@ void BPlusTree<WAL_T>::set_height(uint32_t h)
     g->markDirty();
 }
 
-template <typename WAL_T>
-uint32_t BPlusTree<WAL_T>::height()
+template <typename WAL_T, typename MVCC_T>
+uint32_t BPlusTree<WAL_T, MVCC_T>::height()
 {
     auto g = pool_.fetchPage(META_PAGE_ID);
     assert(g.has_value());
@@ -176,8 +217,8 @@ uint32_t BPlusTree<WAL_T>::height()
 // Returns i such that children[i] is the correct subtree.
 // Invariant: children[i] holds keys k where keys[i-1] <= k < keys[i]
 // (keys[-1] = -inf, keys[ns] = +inf).
-template <typename WAL_T>
-int BPlusTree<WAL_T>::findChildIndex(const InternalNode* node,
+template <typename WAL_T, typename MVCC_T>
+int BPlusTree<WAL_T, MVCC_T>::findChildIndex(const InternalNode* node,
                                       uint64_t search_key) const
 {
     int ns = static_cast<int>(node->header.num_slots);
@@ -194,8 +235,8 @@ int BPlusTree<WAL_T>::findChildIndex(const InternalNode* node,
 // findSlotInLeaf: binary search in a sorted leaf.
 // Returns index of target if found, else -1.
 // If insert_pos != nullptr, sets *insert_pos to the sorted insertion position.
-template <typename WAL_T>
-int BPlusTree<WAL_T>::findSlotInLeaf(const LeafNode* leaf,
+template <typename WAL_T, typename MVCC_T>
+int BPlusTree<WAL_T, MVCC_T>::findSlotInLeaf(const LeafNode* leaf,
                                       uint64_t        target,
                                       int*            insert_pos) const
 {
@@ -216,8 +257,8 @@ int BPlusTree<WAL_T>::findSlotInLeaf(const LeafNode* leaf,
 
 // findLeaf: descend from root to leaf.
 // Appends internal-node IDs to path.  Returns leaf page ID.
-template <typename WAL_T>
-uint32_t BPlusTree<WAL_T>::findLeaf(uint64_t key, std::vector<uint32_t>& path)
+template <typename WAL_T, typename MVCC_T>
+uint32_t BPlusTree<WAL_T, MVCC_T>::findLeaf(uint64_t key, std::vector<uint32_t>& path)
 {
     uint32_t cur = root_page_id();
 
@@ -241,8 +282,8 @@ uint32_t BPlusTree<WAL_T>::findLeaf(uint64_t key, std::vector<uint32_t>& path)
 // get()
 // ─────────────────────────────────────────────────────────────────────────────
 
-template <typename WAL_T>
-std::optional<uint64_t> BPlusTree<WAL_T>::get(uint64_t key)
+template <typename WAL_T, typename MVCC_T>
+std::optional<uint64_t> BPlusTree<WAL_T, MVCC_T>::get(uint64_t key)
 {
     std::vector<uint32_t> path;
     uint32_t leaf_id = findLeaf(key, path);
@@ -252,14 +293,23 @@ std::optional<uint64_t> BPlusTree<WAL_T>::get(uint64_t key)
     const auto* leaf = reinterpret_cast<const LeafNode*>(g->data());
 
     // Use learned index path if enabled; otherwise fall back to traditional binary search.
+    uint64_t raw_value;
     if (use_learned_index_) {
         auto opt_idx = findSlotLearned(leaf, key);
         if (!opt_idx) return std::nullopt;
-        return leaf->entries[*opt_idx].value;
+        raw_value = leaf->entries[*opt_idx].value;
+    } else {
+        int idx = findSlotInLeaf(leaf, key);
+        if (idx < 0) return std::nullopt;
+        raw_value = leaf->entries[idx].value;
     }
-    int idx = findSlotInLeaf(leaf, key);
-    if (idx < 0) return std::nullopt;
-    return leaf->entries[idx].value;
+    // MVCC visibility check: pass commit_ts=0 (per-slot commit_ts not yet stored in LeafEntry).
+    // For TrivialMvcc this is a no-op passthrough; for real MVCC it enforces snapshot isolation.
+    auto txn     = mvcc_.begin();
+    auto visible = mvcc_.read_version(txn, /*page_id*/leaf_id, /*slot_idx*/0u,
+                                      raw_value, /*current_commit_ts*/0u);
+    mvcc_.commit(txn);
+    return visible;  // nullopt if not visible to this txn's snapshot
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -271,8 +321,8 @@ std::optional<uint64_t> BPlusTree<WAL_T>::get(uint64_t key)
 //       direct parent.
 // If path is empty, left_child_id is the current root → create a new root.
 
-template <typename WAL_T>
-bool BPlusTree<WAL_T>::insert_into_parent(const std::vector<uint32_t>& path,
+template <typename WAL_T, typename MVCC_T>
+bool BPlusTree<WAL_T, MVCC_T>::insert_into_parent(const std::vector<uint32_t>& path,
                                            uint32_t left_child_id,
                                            uint64_t fence_key,
                                            uint32_t right_child_id)
@@ -422,8 +472,8 @@ bool BPlusTree<WAL_T>::insert_into_parent(const std::vector<uint32_t>& path,
 // insert()
 // ─────────────────────────────────────────────────────────────────────────────
 
-template <typename WAL_T>
-bool BPlusTree<WAL_T>::insert(uint64_t key, uint64_t value)
+template <typename WAL_T, typename MVCC_T>
+bool BPlusTree<WAL_T, MVCC_T>::insert(uint64_t key, uint64_t value)
 {
     std::vector<uint32_t> path;
     uint32_t leaf_id = findLeaf(key, path);
@@ -435,7 +485,10 @@ bool BPlusTree<WAL_T>::insert(uint64_t key, uint64_t value)
 
         int insert_pos = 0;
         int found = findSlotInLeaf(leaf, key, &insert_pos);
-        if (found >= 0) return false;   // duplicate
+        if (found >= 0) {
+            // Future UPDATE path: mvcc_.archive_version(leaf_id, found, leaf->entries[found].value, 0);
+            return false;   // duplicate key
+        }
 
         int n = static_cast<int>(leaf->header.num_slots);
 
@@ -635,8 +688,8 @@ bool BPlusTree<WAL_T>::insert(uint64_t key, uint64_t value)
 // ─────────────────────────────────────────────────────────────────────────────
 
 // findLeafWithChildIdx: descend from root to leaf, recording (parent_id, child_idx) pairs.
-template <typename WAL_T>
-uint32_t BPlusTree<WAL_T>::findLeafWithChildIdx(
+template <typename WAL_T, typename MVCC_T>
+uint32_t BPlusTree<WAL_T, MVCC_T>::findLeafWithChildIdx(
     uint64_t key,
     std::vector<std::pair<uint32_t, int>>& path)
 {
@@ -656,8 +709,8 @@ uint32_t BPlusTree<WAL_T>::findLeafWithChildIdx(
 }
 
 // remove_from_leaf: compact-shift deletion in a leaf node.
-template <typename WAL_T>
-bool BPlusTree<WAL_T>::remove_from_leaf(uint32_t leaf_id, uint64_t key)
+template <typename WAL_T, typename MVCC_T>
+bool BPlusTree<WAL_T, MVCC_T>::remove_from_leaf(uint32_t leaf_id, uint64_t key)
 {
     auto g = pool_.fetchPage(leaf_id);
     assert(g.has_value());
@@ -678,8 +731,8 @@ bool BPlusTree<WAL_T>::remove_from_leaf(uint32_t leaf_id, uint64_t key)
 }
 
 // find_child_idx_in_parent: linear scan for child_id in parent's children array.
-template <typename WAL_T>
-int BPlusTree<WAL_T>::find_child_idx_in_parent(uint32_t parent_id, uint32_t child_id)
+template <typename WAL_T, typename MVCC_T>
+int BPlusTree<WAL_T, MVCC_T>::find_child_idx_in_parent(uint32_t parent_id, uint32_t child_id)
 {
     auto g = pool_.fetchPage(parent_id);
     assert(g.has_value());
@@ -693,8 +746,8 @@ int BPlusTree<WAL_T>::find_child_idx_in_parent(uint32_t parent_id, uint32_t chil
 
 // redistribute_leaves: borrow one entry from a sibling leaf.
 // child_idx is the index of the underfull leaf in parent.children[].
-template <typename WAL_T>
-bool BPlusTree<WAL_T>::redistribute_leaves(uint32_t parent_id, int child_idx)
+template <typename WAL_T, typename MVCC_T>
+bool BPlusTree<WAL_T, MVCC_T>::redistribute_leaves(uint32_t parent_id, int child_idx)
 {
     auto parent_g = pool_.fetchPage(parent_id);
     assert(parent_g.has_value());
@@ -779,8 +832,8 @@ bool BPlusTree<WAL_T>::redistribute_leaves(uint32_t parent_id, int child_idx)
 }
 
 // merge_leaves: absorb right into left, remove separator from parent.
-template <typename WAL_T>
-void BPlusTree<WAL_T>::merge_leaves(uint32_t parent_id, int child_idx)
+template <typename WAL_T, typename MVCC_T>
+void BPlusTree<WAL_T, MVCC_T>::merge_leaves(uint32_t parent_id, int child_idx)
 {
     auto parent_g = pool_.fetchPage(parent_id);
     assert(parent_g.has_value());
@@ -838,8 +891,8 @@ void BPlusTree<WAL_T>::merge_leaves(uint32_t parent_id, int child_idx)
 }
 
 // redistribute_internal: rotate a key through the grandparent separator between two siblings.
-template <typename WAL_T>
-bool BPlusTree<WAL_T>::redistribute_internal(uint32_t grandparent_id, int child_idx)
+template <typename WAL_T, typename MVCC_T>
+bool BPlusTree<WAL_T, MVCC_T>::redistribute_internal(uint32_t grandparent_id, int child_idx)
 {
     auto gp_g = pool_.fetchPage(grandparent_id);
     assert(gp_g.has_value());
@@ -929,8 +982,8 @@ bool BPlusTree<WAL_T>::redistribute_internal(uint32_t grandparent_id, int child_
 }
 
 // merge_internal: merge internal node at child_idx with adjacent sibling, pulling down separator.
-template <typename WAL_T>
-void BPlusTree<WAL_T>::merge_internal(uint32_t grandparent_id, int child_idx)
+template <typename WAL_T, typename MVCC_T>
+void BPlusTree<WAL_T, MVCC_T>::merge_internal(uint32_t grandparent_id, int child_idx)
 {
     auto gp_g = pool_.fetchPage(grandparent_id);
     assert(gp_g.has_value());
@@ -992,8 +1045,8 @@ void BPlusTree<WAL_T>::merge_internal(uint32_t grandparent_id, int child_idx)
 }
 
 // fix_internal_underflow: propagate merge upward after an internal node loses a key.
-template <typename WAL_T>
-void BPlusTree<WAL_T>::fix_internal_underflow(
+template <typename WAL_T, typename MVCC_T>
+void BPlusTree<WAL_T, MVCC_T>::fix_internal_underflow(
     std::vector<std::pair<uint32_t, int>>& path_with_idx, int level)
 {
     // path_with_idx[level] = {underflowing_node_id, child_idx_it_took_in_its_parent}
@@ -1051,8 +1104,8 @@ void BPlusTree<WAL_T>::fix_internal_underflow(
 }
 
 // remove(): main entry point for deletion.
-template <typename WAL_T>
-bool BPlusTree<WAL_T>::remove(uint64_t key)
+template <typename WAL_T, typename MVCC_T>
+bool BPlusTree<WAL_T, MVCC_T>::remove(uint64_t key)
 {
     std::vector<std::pair<uint32_t, int>> path_with_idx;
     uint32_t leaf_id = findLeafWithChildIdx(key, path_with_idx);
@@ -1113,8 +1166,8 @@ bool BPlusTree<WAL_T>::remove(uint64_t key)
 // Phase 5 — scan() iterator
 // ─────────────────────────────────────────────────────────────────────────────
 
-template <typename WAL_T>
-void BPlusTree<WAL_T>::Iterator::advance_to_next_valid()
+template <typename WAL_T, typename MVCC_T>
+void BPlusTree<WAL_T, MVCC_T>::Iterator::advance_to_next_valid()
 {
     while (current_leaf_id_ != INVALID_PAGE_ID) {
         auto g = tree_->pool_.fetchPage(current_leaf_id_);
@@ -1142,14 +1195,14 @@ void BPlusTree<WAL_T>::Iterator::advance_to_next_valid()
     valid_ = false;
 }
 
-template <typename WAL_T>
-bool BPlusTree<WAL_T>::Iterator::valid() const
+template <typename WAL_T, typename MVCC_T>
+bool BPlusTree<WAL_T, MVCC_T>::Iterator::valid() const
 {
     return valid_;
 }
 
-template <typename WAL_T>
-uint64_t BPlusTree<WAL_T>::Iterator::key() const
+template <typename WAL_T, typename MVCC_T>
+uint64_t BPlusTree<WAL_T, MVCC_T>::Iterator::key() const
 {
     auto g = tree_->pool_.fetchPage(current_leaf_id_);
     assert(g.has_value());
@@ -1157,8 +1210,8 @@ uint64_t BPlusTree<WAL_T>::Iterator::key() const
     return leaf->entries[slot_idx_].key;
 }
 
-template <typename WAL_T>
-uint64_t BPlusTree<WAL_T>::Iterator::value() const
+template <typename WAL_T, typename MVCC_T>
+uint64_t BPlusTree<WAL_T, MVCC_T>::Iterator::value() const
 {
     auto g = tree_->pool_.fetchPage(current_leaf_id_);
     assert(g.has_value());
@@ -1166,16 +1219,16 @@ uint64_t BPlusTree<WAL_T>::Iterator::value() const
     return leaf->entries[slot_idx_].value;
 }
 
-template <typename WAL_T>
-void BPlusTree<WAL_T>::Iterator::next()
+template <typename WAL_T, typename MVCC_T>
+void BPlusTree<WAL_T, MVCC_T>::Iterator::next()
 {
     if (!valid_) return;
     slot_idx_++;
     advance_to_next_valid();
 }
 
-template <typename WAL_T>
-typename BPlusTree<WAL_T>::Iterator BPlusTree<WAL_T>::scan(uint64_t lo, uint64_t hi)
+template <typename WAL_T, typename MVCC_T>
+typename BPlusTree<WAL_T, MVCC_T>::Iterator BPlusTree<WAL_T, MVCC_T>::scan(uint64_t lo, uint64_t hi)
 {
     Iterator it;
     it.tree_            = this;
@@ -1235,6 +1288,6 @@ typename BPlusTree<WAL_T>::Iterator BPlusTree<WAL_T>::scan(uint64_t lo, uint64_t
 // a header-only library), we must explicitly instantiate for each WAL type
 // used by tests.  NullWAL is the only one used in Phase 3.
 
-template class BPlusTree<NullWAL>;
+template class BPlusTree<NullWAL>;  // BPlusTree<NullWAL, TrivialMvcc> via default
 
 }  // namespace adapttree

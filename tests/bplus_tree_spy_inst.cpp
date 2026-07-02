@@ -6,5 +6,5 @@
 #include "../src/bplus_tree.cpp"  // NOLINT: deliberate TU-scoped include for instantiation
 
 namespace adapttree {
-template class BPlusTree<SpyWal>;
+template class BPlusTree<SpyWal>;  // BPlusTree<SpyWal, TrivialMvcc> via default
 }
