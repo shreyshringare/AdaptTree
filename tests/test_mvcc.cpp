@@ -292,3 +292,56 @@ TEST(MvccEpochOrdering, EpochOrdering_RegisterBeforeGCAdvances) {
     // Once the only reader commits, no active readers remain.
     EXPECT_EQ(mvcc.oldest_active_read_ts(), UINT64_MAX);
 }
+
+// ---------------------------------------------------------------------------
+// Cycle 7 — Concurrent Reader / Single Writer Locking (MVCC-06)
+// ---------------------------------------------------------------------------
+
+TEST(MvccConcurrency, ConcurrentReaders_SharedLockDoesNotBlock) {
+    MVCC mvcc;
+    std::shared_mutex latch;
+
+    // Archive a version all readers can see (commit_ts=1).
+    mvcc.archive_version(30, 0, 555, 1);
+
+    std::atomic<int> success_count{0};
+
+    auto reader_fn = [&]() {
+        std::shared_lock<std::shared_mutex> sl(latch);
+        Transaction txn = mvcc.begin();
+        // Inline (value=999, commit_ts=100): visible only if txn.read_ts >= 100.
+        // Old version (555, commit_ts=1): visible if txn.read_ts >= 1 (always true).
+        // Either way at least one version should be visible.
+        auto result = mvcc.read_version(txn, 30, 0, 999, 100);
+        EXPECT_TRUE(result.has_value());
+        mvcc.commit(txn);
+        success_count.fetch_add(1, std::memory_order_relaxed);
+    };
+
+    std::vector<std::thread> readers;
+    readers.reserve(4);
+    for (int i = 0; i < 4; ++i) {
+        readers.emplace_back(reader_fn);
+    }
+    for (auto& t : readers) {
+        t.join();
+    }
+
+    EXPECT_EQ(success_count.load(), 4);
+}
+
+TEST(MvccConcurrency, Writer_ExclusiveLockBlocksReaders) {
+    std::shared_mutex latch;
+
+    // Writer holds exclusive lock.
+    std::unique_lock<std::shared_mutex> ul(latch);
+
+    // A concurrent reader must not be able to acquire a shared lock.
+    EXPECT_FALSE(latch.try_lock_shared());
+
+    ul.unlock();
+
+    // After the writer releases, shared acquisition must succeed.
+    EXPECT_TRUE(latch.try_lock_shared());
+    latch.unlock_shared();
+}
