@@ -24,6 +24,11 @@ add_library(adapttree STATIC
 target_include_directories(adapttree PUBLIC include)
 target_compile_features(adapttree PUBLIC cxx_std_20)
 
+# Library: mvcc (pure in-memory, no dependency on adapttree/bplus_tree/buffer_pool)
+add_library(mvcc STATIC src/mvcc.cpp)
+target_include_directories(mvcc PUBLIC include)
+target_compile_features(mvcc PUBLIC cxx_std_20)
+
 add_subdirectory(tests)
 
 option(ADAPTTREE_FUZZING "Build differential fuzzer (requires Clang + libFuzzer)" OFF)

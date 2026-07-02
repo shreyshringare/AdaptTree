@@ -1,24 +1,65 @@
 #pragma once
+#include <atomic>
 #include <cstdint>
+#include <functional>
+#include <mutex>
+#include <optional>
+#include <set>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
-// MVCC (Multi-Version Concurrency Control) interface — real implementation in Phase 5.
-// Phase 3 does not use MVCC; these stubs exist for future integration and unit tests.
+namespace adapttree {
 
-struct Mvcc {
-    virtual ~Mvcc() = default;
-
-    // Begin a new transaction.  Returns a read timestamp for this transaction.
-    virtual uint64_t begin() = 0;
-
-    // Returns true if a record written at write_ts is visible to a transaction
-    // with read timestamp txn_read_ts.
-    virtual bool is_visible(uint64_t write_ts, uint64_t txn_read_ts) const = 0;
+struct OldVersion {
+    uint64_t value;
+    uint64_t commit_ts;
 };
 
-// NullMvcc: no-op stub.  All writes are immediately visible to all readers.
-struct NullMvcc final : Mvcc {
-    uint64_t begin() override { return 1; }
-    bool is_visible(uint64_t /*write_ts*/, uint64_t /*txn_read_ts*/) const override {
-        return true;
+struct Transaction {
+    uint64_t txn_id;   // monotonic ID assigned at begin()
+    uint64_t read_ts;  // snapshot of txn_id counter at begin()
+    uint64_t write_ts; // assigned at commit() from same counter
+};
+
+} // namespace adapttree
+
+// Hash specialization for std::pair<uint64_t, uint32_t>
+namespace std {
+template <>
+struct hash<std::pair<uint64_t, uint32_t>> {
+    std::size_t operator()(const std::pair<uint64_t, uint32_t>& p) const noexcept {
+        std::size_t h1 = std::hash<uint64_t>{}(p.first);
+        std::size_t h2 = std::hash<uint32_t>{}(p.second);
+        return h1 ^ (h2 * 0x9e3779b97f4a7c15ULL + 0x6c62272e07bb0142ULL + (h1 << 6) + (h1 >> 2));
     }
 };
+} // namespace std
+
+namespace adapttree {
+
+class MVCC {
+public:
+    Transaction begin();
+    void commit(Transaction& txn);
+    void abort(Transaction& txn);
+
+    void archive_version(uint64_t page_id, uint32_t slot_idx,
+                         uint64_t old_value, uint64_t commit_ts);
+
+    std::optional<uint64_t> read_version(const Transaction& txn,
+                                          uint64_t page_id, uint32_t slot_idx,
+                                          uint64_t current_value,
+                                          uint64_t current_commit_ts) const;
+
+    void gc();
+    uint64_t oldest_active_read_ts() const;
+
+private:
+    std::atomic<uint64_t> next_txn_id_{1};
+    mutable std::mutex mvcc_mutex_;
+    std::set<uint64_t> active_txns_;
+    std::unordered_map<std::pair<uint64_t, uint32_t>, std::vector<OldVersion>> old_versions_;
+};
+
+} // namespace adapttree

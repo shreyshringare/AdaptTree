@@ -33,3 +33,7 @@ target_include_directories(wal_tests PRIVATE ../include .)
 target_link_libraries(wal_tests PRIVATE adapttree GTest::gtest_main)
 target_compile_features(wal_tests PRIVATE cxx_std_20)
 gtest_discover_tests(wal_tests)
+
+add_executable(test_mvcc test_mvcc.cpp)
+target_link_libraries(test_mvcc PRIVATE mvcc GTest::gtest_main)
+gtest_discover_tests(test_mvcc)
