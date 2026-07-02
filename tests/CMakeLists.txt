@@ -41,3 +41,13 @@ gtest_discover_tests(test_mvcc)
 add_executable(pgm_builder_tests test_pgm_builder.cpp)
 target_link_libraries(pgm_builder_tests PRIVATE pgm_builder GTest::gtest_main)
 gtest_discover_tests(pgm_builder_tests)
+
+add_executable(test_learned_integration
+  test_learned_integration.cpp
+  ../src/bplus_tree.cpp
+  ../src/buffer_pool.cpp
+)
+target_include_directories(test_learned_integration PRIVATE ../include)
+target_link_libraries(test_learned_integration PRIVATE pgm_builder GTest::gtest_main)
+target_compile_features(test_learned_integration PRIVATE cxx_std_20)
+gtest_discover_tests(test_learned_integration)
