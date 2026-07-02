@@ -345,3 +345,70 @@ TEST(MvccConcurrency, Writer_ExclusiveLockBlocksReaders) {
     EXPECT_TRUE(latch.try_lock_shared());
     latch.unlock_shared();
 }
+
+// ---------------------------------------------------------------------------
+// Cycle 8 — Integration Smoke Test
+// ---------------------------------------------------------------------------
+
+TEST(MvccIntegration, FullLifecycle_BeginWriteCommitRead) {
+    MVCC mvcc;
+
+    // Committed baseline for (page=20, slot=0): value=0 at commit_ts=0.
+    mvcc.archive_version(20, 0, 0, 0);
+
+    // txn1 opens a snapshot at T1.
+    Transaction txn1 = mvcc.begin();
+    uint64_t T1 = txn1.read_ts;
+
+    // txn2 begins and commits immediately (write_ts = W2 > T1).
+    Transaction txn2 = mvcc.begin();
+    mvcc.commit(txn2);
+    uint64_t W2 = txn2.write_ts;
+    EXPECT_GT(W2, T1);
+
+    // txn3 opens after W2 has been assigned (T3 > W2).
+    Transaction txn3 = mvcc.begin();
+    uint64_t T3 = txn3.read_ts;
+    EXPECT_GT(T3, W2);
+
+    // Simulate: inline slot now holds (value=42, commit_ts=W2).
+
+    // txn1 snapshot (T1 < W2) must NOT see the new write; falls back to
+    // archived version (0, commit_ts=0) which is visible (0 <= T1).
+    auto r1 = mvcc.read_version(txn1, 20, 0, 42, W2);
+    EXPECT_TRUE(r1.has_value());
+    EXPECT_EQ(r1.value(), 0ULL);
+
+    // txn3 snapshot (T3 > W2) MUST see the new inline write.
+    auto r3 = mvcc.read_version(txn3, 20, 0, 42, W2);
+    EXPECT_TRUE(r3.has_value());
+    EXPECT_EQ(r3.value(), 42ULL);
+
+    // Commit everyone, then GC.
+    mvcc.commit(txn1);
+    mvcc.commit(txn3);
+    mvcc.gc();
+    // No active readers → min_ts = UINT64_MAX.
+    // old_versions for (20,0) has one entry (commit_ts=0); conservative rule
+    // retains the last entry, so the map remains intact — no assertion needed.
+}
+
+TEST(MvccIntegration, AbortDoesNotCommitVersion) {
+    MVCC mvcc;
+
+    // Writer begins but does NOT commit.
+    Transaction txn_w = mvcc.begin();
+    mvcc.archive_version(21, 0, 5, 1);
+
+    // Abort: write_ts stays 0, txn removed from active set.
+    mvcc.abort(txn_w);
+    EXPECT_EQ(txn_w.write_ts, 0ULL);
+    EXPECT_EQ(mvcc.oldest_active_read_ts(), UINT64_MAX);
+
+    // A fresh reader is now the sole active transaction.
+    Transaction txn_r = mvcc.begin();
+    EXPECT_EQ(mvcc.oldest_active_read_ts(), txn_r.read_ts);
+
+    mvcc.commit(txn_r);
+    EXPECT_EQ(mvcc.oldest_active_read_ts(), UINT64_MAX);
+}
