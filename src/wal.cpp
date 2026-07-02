@@ -126,6 +126,41 @@ void Wal::flush_to(uint64_t lsn) {
     }
 }
 
+void Wal::checkpoint(std::function<void()> flush_dirty_pages) {
+    // Step 1: append CHECKPOINT record
+    WalRecord rec;
+    rec.record_type = WalRecordType::CHECKPOINT;
+    rec.redo_len = 0; rec.undo_len = 0;
+    uint64_t ckpt_lsn = append(rec);
+
+    // Step 2: fsync WAL
+    flush_to(ckpt_lsn);
+
+    // Step 3: flush dirty pages (caller's responsibility)
+    flush_dirty_pages();
+
+    // Step 4: write checkpoint LSN to .ckpt sidecar file
+    std::string ckpt_path = path_ + ".ckpt";
+    int cfd = open(ckpt_path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (cfd < 0) return;
+
+    // Write 8B lsn + 4B crc32c(lsn) + zero-pad to 4096B
+    std::vector<uint8_t> ckpt_buf(4096, 0);
+    std::memcpy(ckpt_buf.data(), &ckpt_lsn, 8);
+    uint32_t crc = crc32c(reinterpret_cast<const uint8_t*>(&ckpt_lsn), 8);
+    std::memcpy(ckpt_buf.data() + 8, &crc, 4);
+
+    const uint8_t* ptr = ckpt_buf.data();
+    size_t rem = ckpt_buf.size();
+    while (rem > 0) {
+        ssize_t n = write(cfd, ptr, rem);
+        if (n < 0) { if (errno == EINTR) continue; break; }
+        ptr += static_cast<size_t>(n); rem -= static_cast<size_t>(n);
+    }
+    fdatasync(cfd);
+    close(cfd);
+}
+
 uint64_t Wal::last_checkpoint_lsn() const {
     std::string ckpt_path = path_ + ".ckpt";
     int cfd = open(ckpt_path.c_str(), O_RDONLY);
