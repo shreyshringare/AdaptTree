@@ -11,6 +11,9 @@
 #include <thread>
 #include <vector>
 
+// Forward declaration — WalRecord is defined later in this header.
+struct WalRecord;
+
 // WAL (Write-Ahead Log) interface — real implementation deferred to Phase 6.
 // BPlusTree calls append() before marking a page dirty, then flush_to() before
 // writing dirty pages to disk.  The NullWAL stub satisfies duck-typing for tests.
@@ -38,6 +41,8 @@ struct NullWAL final : WAL {
                     uint16_t /*redo_len*/) override {
         return UINT64_MAX;
     }
+    // New WalRecord-based interface for BPlusTree<NullWAL> usage (defined after WalRecord below)
+    uint64_t append(WalRecord& r);
     void     flush_to(uint64_t /*target_lsn*/) override {}
     uint64_t flushed_lsn() const override { return UINT64_MAX; }
 };
@@ -81,6 +86,9 @@ struct WalRecord {
     static std::optional<WalRecord> deserialize(std::span<const uint8_t> buf);
 };
 
+// NullWAL::append(WalRecord&) — defined here after WalRecord is complete.
+inline uint64_t NullWAL::append(WalRecord& r) { r.lsn = UINT64_MAX; return UINT64_MAX; }
+
 // ── Wal class ─────────────────────────────────────────────────────────────────
 
 class Wal {
@@ -90,6 +98,7 @@ public:
 
     uint64_t append(WalRecord& record);
     void flush_to(uint64_t lsn);
+    void checkpoint(std::function<void()> flush_dirty_pages);
     uint64_t flushed_lsn() const { return flushed_lsn_.load(std::memory_order_acquire); }
     uint64_t current_lsn() const { return next_lsn_.load(std::memory_order_acquire) - 1; }
     uint64_t last_checkpoint_lsn() const;

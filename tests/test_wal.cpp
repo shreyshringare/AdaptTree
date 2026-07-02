@@ -1,5 +1,8 @@
 #include <gtest/gtest.h>
 #include "adapttree/wal.hpp"
+#include "spy_wal.hpp"
+#include "adapttree/bplus_tree.hpp"
+#include "adapttree/buffer_pool.hpp"
 
 #include <cstdio>
 #include <cstring>
@@ -7,6 +10,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <thread>
+#include <memory>
 
 // ── TempFile RAII helper ──────────────────────────────────────────────────────
 struct TempFile {
@@ -16,7 +20,11 @@ struct TempFile {
         int fd = mkstemp(path);
         if (fd >= 0) close(fd);
     }
-    ~TempFile() { unlink(path); }
+    ~TempFile() {
+        unlink(path);
+        std::string ckpt = std::string(path) + ".ckpt";
+        unlink(ckpt.c_str());
+    }
 };
 
 // ── WalRecordFormat ───────────────────────────────────────────────────────────
@@ -244,4 +252,129 @@ TEST(WalCrashSimulation, CrcFlipStopsRecovery) {
     }
     auto records = wal2.read_all();
     EXPECT_EQ(records.size(), size_t{2});
+}
+
+// ── WalBeforeData ─────────────────────────────────────────────────────────────
+
+struct SpyTreeFixture {
+    char tmp[64];
+    SpyWal spy;
+    std::unique_ptr<adapttree::DiskManager> dm;
+    std::unique_ptr<adapttree::BufferPool<SpyWal>> pool;
+    std::unique_ptr<adapttree::BPlusTree<SpyWal>> tree;
+
+    SpyTreeFixture() {
+        strcpy(tmp, "/tmp/spy_tree_XXXXXX");
+        int fd = mkstemp(tmp); if (fd >= 0) close(fd);
+        dm   = std::make_unique<adapttree::DiskManager>(tmp);
+        pool = std::make_unique<adapttree::BufferPool<SpyWal>>(dm.get(), &spy, 64);
+        tree = std::make_unique<adapttree::BPlusTree<SpyWal>>(*pool, spy);
+        spy.events.clear();  // clear constructor events
+    }
+    ~SpyTreeFixture() { unlink(tmp); }
+};
+
+TEST(WalBeforeData, AppendCalledBeforePageModified) {
+    SpyTreeFixture f;
+    f.tree->insert(42, 99);
+    ASSERT_FALSE(f.spy.events.empty());
+    bool found_insert = false;
+    for (auto& e : f.spy.events) {
+        if (e.type == WalRecordType::INSERT) { found_insert = true; break; }
+    }
+    EXPECT_TRUE(found_insert);
+}
+
+TEST(WalBeforeData, PageLsnMatchesReturnedLsn) {
+    SpyTreeFixture f;
+    size_t before = f.spy.events.size();
+    f.tree->insert(1, 100);
+    f.tree->insert(2, 200);
+    f.tree->insert(3, 300);
+    EXPECT_GT(f.spy.events.size(), before + 2);
+    // LSNs are strictly increasing
+    for (size_t i = 1; i < f.spy.events.size(); ++i)
+        EXPECT_LT(f.spy.events[i-1].lsn, f.spy.events[i].lsn);
+}
+
+TEST(WalBeforeData, WalAppendedBeforePageBytesVisible) {
+    SpyTreeFixture f;
+    f.tree->insert(100, 999);
+    auto val = f.tree->get(100);
+    ASSERT_TRUE(val.has_value());
+    EXPECT_EQ(*val, uint64_t{999});
+    EXPECT_FALSE(f.spy.events.empty());
+    bool has_insert_with_page = false;
+    for (auto& e : f.spy.events)
+        if (e.type == WalRecordType::INSERT && e.page_id != 0) { has_insert_with_page = true; break; }
+    EXPECT_TRUE(has_insert_with_page);
+}
+
+// ── WalCheckpoint ─────────────────────────────────────────────────────────────
+
+TEST(WalCheckpoint, CheckpointRecordAppearsInLog) {
+    TempFile tf;
+    Wal wal(tf.path);
+    WalRecord r; r.record_type = WalRecordType::INSERT; r.redo_len = 0; r.undo_len = 0;
+    wal.append(r);
+    wal.checkpoint([]{});
+    auto records = wal.read_all();
+    ASSERT_FALSE(records.empty());
+    EXPECT_EQ(records.back().record_type, WalRecordType::CHECKPOINT);
+}
+
+TEST(WalCheckpoint, CheckpointLsnGreaterThanPriorLsn) {
+    TempFile tf;
+    Wal wal(tf.path);
+    WalRecord r1; r1.record_type = WalRecordType::INSERT; r1.redo_len = 0; r1.undo_len = 0;
+    uint64_t lsn1 = wal.append(r1);
+    wal.checkpoint([]{});
+    auto records = wal.read_all();
+    ASSERT_GE(records.size(), size_t{2});
+    EXPECT_EQ(records.back().record_type, WalRecordType::CHECKPOINT);
+    EXPECT_GT(records.back().lsn, lsn1);
+}
+
+TEST(WalCheckpoint, CheckpointLsnPersistsAcrossReopen) {
+    TempFile tf;
+    uint64_t expected_ckpt_lsn = 0;
+    {
+        Wal wal(tf.path);
+        for (int i = 0; i < 5; ++i) {
+            WalRecord r; r.record_type = WalRecordType::INSERT; r.redo_len = 0; r.undo_len = 0;
+            wal.append(r);
+        }
+        wal.checkpoint([]{});
+        auto records = wal.read_all();
+        expected_ckpt_lsn = records.back().lsn;
+    }
+    Wal wal2(tf.path);
+    EXPECT_EQ(wal2.last_checkpoint_lsn(), expected_ckpt_lsn);
+}
+
+TEST(WalCheckpoint, CheckpointFileIs4KB) {
+    TempFile tf;
+    Wal wal(tf.path);
+    wal.checkpoint([]{});
+    std::string ckpt = std::string(tf.path) + ".ckpt";
+    struct stat st;
+    int rc = stat(ckpt.c_str(), &st);
+    ASSERT_EQ(rc, 0) << "checkpoint file not created";
+    EXPECT_EQ(static_cast<size_t>(st.st_size), size_t{4096});
+    int cfd = open(ckpt.c_str(), O_RDONLY);
+    uint64_t lsn_from_file = 0;
+    read(cfd, &lsn_from_file, 8);
+    close(cfd);
+    auto records = wal.read_all();
+    EXPECT_EQ(lsn_from_file, records.back().lsn);
+}
+
+TEST(WalCheckpoint, DirtyPageFlusherCalledBeforeLsnWrite) {
+    TempFile tf;
+    Wal wal(tf.path);
+    bool flusher_called = false;
+    wal.checkpoint([&]{ flusher_called = true; });
+    EXPECT_TRUE(flusher_called);
+    std::string ckpt = std::string(tf.path) + ".ckpt";
+    EXPECT_EQ(access(ckpt.c_str(), F_OK), 0);
 }

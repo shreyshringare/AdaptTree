@@ -24,8 +24,12 @@ target_link_libraries(bplus_tree_tests PRIVATE GTest::gtest_main)
 target_compile_features(bplus_tree_tests PRIVATE cxx_std_20)
 gtest_discover_tests(bplus_tree_tests)
 
-add_executable(wal_tests test_wal.cpp)
-target_include_directories(wal_tests PRIVATE ../include)
+add_executable(wal_tests
+  test_wal.cpp
+  bplus_tree_spy_inst.cpp
+  ../src/buffer_pool.cpp
+)
+target_include_directories(wal_tests PRIVATE ../include .)
 target_link_libraries(wal_tests PRIVATE adapttree GTest::gtest_main)
 target_compile_features(wal_tests PRIVATE cxx_std_20)
 gtest_discover_tests(wal_tests)

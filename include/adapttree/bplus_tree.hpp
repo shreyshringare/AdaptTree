@@ -203,6 +203,7 @@ public:
 private:
     BufferPool<WAL_T>& pool_;
     WAL_T&             wal_;
+    std::atomic<uint64_t> next_txn_id_{1};
 
     // ── Meta helpers ──────────────────────────────────────────────────────────
     uint32_t root_page_id();
