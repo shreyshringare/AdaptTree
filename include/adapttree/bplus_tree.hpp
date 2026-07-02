@@ -98,8 +98,9 @@ static_assert(sizeof(LeafEntry) == 16);
 //   [3]      _model_pad                 uint8_t  — reserved, always 0
 //   [4..31]  _seg_bytes[28]             uint8_t  — stores one LearnedSegment (<=24B)
 //
-// Accessors reinterpret _seg_bytes as LearnedSegment.
-// LearnedSegment is trivially copyable (double*2 + uint16_t = 24 bytes natural layout).
+// Accessors use memcpy to avoid alignment UB (LearnedSegment has 8-byte doubles
+// but _seg_bytes starts at offset 4 within a packed struct, so alignment is not
+// guaranteed).  LearnedSegment is trivially copyable — memcpy is always correct.
 
 #pragma pack(push, 1)
 struct LeafModelArea {
@@ -108,11 +109,13 @@ struct LeafModelArea {
     uint8_t  _model_pad                 = 0;
     uint8_t  _seg_bytes[28]             = {};
 
-    LearnedSegment& learnedSegmentMut() noexcept {
-        return *reinterpret_cast<LearnedSegment*>(_seg_bytes);
+    LearnedSegment learnedSegment() const noexcept {
+        LearnedSegment seg;
+        std::memcpy(&seg, _seg_bytes, sizeof(LearnedSegment));
+        return seg;
     }
-    const LearnedSegment& learnedSegment() const noexcept {
-        return *reinterpret_cast<const LearnedSegment*>(_seg_bytes);
+    void setLearnedSegment(const LearnedSegment& seg) noexcept {
+        std::memcpy(_seg_bytes, &seg, sizeof(LearnedSegment));
     }
 };
 #pragma pack(pop)

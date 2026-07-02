@@ -508,7 +508,7 @@ bool BPlusTree<WAL_T>::insert(uint64_t key, uint64_t value)
             // Multiple segments mean the key distribution is non-linear; we skip
             // model storage and leave has_model=0 so search falls back to binary search.
             if (left_segs.size() == 1) {
-                leaf->model.learnedSegmentMut() = left_segs[0];
+                leaf->model.setLearnedSegment(left_segs[0]);
                 leaf->model.has_model                   = 1;
                 leaf->model.inserts_since_model_rebuild = 0;
 #ifndef NDEBUG
@@ -579,7 +579,7 @@ bool BPlusTree<WAL_T>::insert(uint64_t key, uint64_t value)
             auto right_segs = pgm_builder_.fit(right_kp);
             // Only store a model when fit() produces exactly one segment.
             if (right_segs.size() == 1) {
-                right->model.learnedSegmentMut() = right_segs[0];
+                right->model.setLearnedSegment(right_segs[0]);
                 right->model.has_model                   = 1;
                 right->model.inserts_since_model_rebuild = 0;
 #ifndef NDEBUG
