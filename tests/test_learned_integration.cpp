@@ -17,30 +17,6 @@
 #include <vector>
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Test WAL spy — records the last page written so LEARN-03 can inspect the
-// after-image bytes embedded in the page header (WAL records the full page).
-// ─────────────────────────────────────────────────────────────────────────────
-
-struct RecordingWAL {
-    uint64_t next_lsn = 1;
-
-    // Last full page bytes seen by an INSERT/UPDATE — used by LEARN-03.
-    std::vector<uint8_t> last_redo_bytes;
-    uint32_t             last_redo_page_id = 0;
-
-    uint64_t append(WalRecord& r) {
-        r.lsn = next_lsn++;
-        if (!r.redo_data.empty()) {
-            last_redo_bytes   = r.redo_data;
-            last_redo_page_id = r.page_id;
-        }
-        return r.lsn;
-    }
-    void     flush_to(uint64_t) {}
-    uint64_t flushed_lsn() const { return UINT64_MAX; }
-};
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Helper: build an in-memory BPlusTree backed by a tiny DiskManager-free pool.
 // We reuse the same pattern as earlier phase tests: NullWAL + in-memory pool.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -49,7 +25,6 @@ namespace adapttree {
 
 // Explicit instantiation declaration so the linker finds the implementation.
 extern template class BPlusTree<NullWAL>;
-extern template class BPlusTree<RecordingWAL>;
 
 }  // namespace adapttree
 
