@@ -24,3 +24,8 @@ target_include_directories(adapttree PUBLIC include)
 target_compile_features(adapttree PUBLIC cxx_std_20)
 
 add_subdirectory(tests)
+
+option(ADAPTTREE_FUZZING "Build differential fuzzer (requires Clang + libFuzzer)" OFF)
+if(ADAPTTREE_FUZZING)
+  add_subdirectory(fuzz)
+endif()
