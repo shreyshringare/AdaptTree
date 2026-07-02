@@ -239,6 +239,9 @@ public:
     // Counts how many times bounded search missed and full binary search was used.
     mutable std::atomic<uint64_t> fallback_count_{0};
 
+    // Counts total binary search loop iterations (for benchmarking avg comparisons).
+    mutable std::atomic<uint64_t> cmp_count_{0};
+
     // findSlotInLeaf (new learned-index overload):
     // Returns the slot index of `key` in the leaf, or std::nullopt if not found.
     // Uses the learned segment when use_learned_index_=true and model is fresh.

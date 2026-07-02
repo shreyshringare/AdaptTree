@@ -106,12 +106,15 @@ BPlusTree<WAL_T, MVCC_T>::fullBinarySearchOpt(const LeafNode* leaf, uint64_t key
 {
     int n = static_cast<int>(leaf->header.num_slots);
     int lo = 0, hi = n;
+    uint64_t iters = 0;
     while (lo < hi) {
+        ++iters;
         int mid = lo + (hi - lo) / 2;
         if      (leaf->entries[mid].key < key) lo = mid + 1;
         else if (leaf->entries[mid].key > key) hi = mid;
-        else return static_cast<uint32_t>(mid);
+        else { cmp_count_.fetch_add(iters, std::memory_order_relaxed); return static_cast<uint32_t>(mid); }
     }
+    cmp_count_.fetch_add(iters, std::memory_order_relaxed);
     return std::nullopt;
 }
 
@@ -124,12 +127,15 @@ BPlusTree<WAL_T, MVCC_T>::boundedBinarySearch(const LeafNode* leaf, uint64_t key
     if (lo > hi) return std::nullopt;
     int ilo = static_cast<int>(lo);
     int ihi = static_cast<int>(hi) + 1;  // half-open upper bound
+    uint64_t iters = 0;
     while (ilo < ihi) {
+        ++iters;
         int mid = ilo + (ihi - ilo) / 2;
         if      (leaf->entries[mid].key < key) ilo = mid + 1;
         else if (leaf->entries[mid].key > key) ihi = mid;
-        else return static_cast<uint32_t>(mid);
+        else { cmp_count_.fetch_add(iters, std::memory_order_relaxed); return static_cast<uint32_t>(mid); }
     }
+    cmp_count_.fetch_add(iters, std::memory_order_relaxed);
     return std::nullopt;
 }
 
@@ -242,15 +248,19 @@ int BPlusTree<WAL_T, MVCC_T>::findSlotInLeaf(const LeafNode* leaf,
 {
     int n  = static_cast<int>(leaf->header.num_slots);
     int lo = 0, hi = n;
+    uint64_t iters = 0;
     while (lo < hi) {
+        ++iters;
         int mid = lo + (hi - lo) / 2;
         if (leaf->entries[mid].key < target)       lo = mid + 1;
         else if (leaf->entries[mid].key > target)  hi = mid;
         else {
+            cmp_count_.fetch_add(iters, std::memory_order_relaxed);
             if (insert_pos) *insert_pos = mid;
             return mid;
         }
     }
+    cmp_count_.fetch_add(iters, std::memory_order_relaxed);
     if (insert_pos) *insert_pos = lo;
     return -1;
 }

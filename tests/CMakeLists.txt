@@ -72,3 +72,13 @@ target_include_directories(test_mvcc_bptree_integration PRIVATE ../include)
 target_link_libraries(test_mvcc_bptree_integration PRIVATE pgm_builder GTest::gtest_main)
 target_compile_features(test_mvcc_bptree_integration PRIVATE cxx_std_20)
 gtest_discover_tests(test_mvcc_bptree_integration)
+
+add_executable(test_bplustree_counters
+  test_bplustree_counters.cpp
+  ../src/bplus_tree.cpp
+  ../src/buffer_pool.cpp
+)
+target_include_directories(test_bplustree_counters PRIVATE ../include)
+target_link_libraries(test_bplustree_counters PRIVATE pgm_builder GTest::gtest_main)
+target_compile_features(test_bplustree_counters PRIVATE cxx_std_20)
+gtest_discover_tests(test_bplustree_counters)
