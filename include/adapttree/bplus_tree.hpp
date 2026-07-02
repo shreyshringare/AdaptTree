@@ -165,6 +165,41 @@ public:
     // Return the current height of the tree (1 means the root is a leaf node).
     uint32_t height();
 
+    // Remove key from the tree.  Returns true if the key was found and removed,
+    // false if the key did not exist.  May trigger leaf redistribution, leaf merge,
+    // internal-node underflow propagation, and root collapse.
+    bool remove(uint64_t key);
+
+    // ── Range-scan iterator ───────────────────────────────────────────────────
+    // Iterator invalidation: any call to insert() or remove() after scan() returns
+    // this Iterator may corrupt the iteration — next_leaf_id pointers may change
+    // due to splits or merges. This is documented behavior, not enforced at runtime.
+    // Do not interleave writes with active iterators.
+    class Iterator {
+    public:
+        bool     valid() const;
+        uint64_t key()   const;
+        uint64_t value() const;
+        void     next();
+
+    private:
+        friend class BPlusTree<WAL_T>;
+        BPlusTree<WAL_T>* tree_;
+        uint32_t          current_leaf_id_;
+        int               slot_idx_;
+        uint64_t          hi_;
+        bool              valid_;
+
+        void advance_to_next_valid();
+    };
+
+    // scan(lo, hi): returns an Iterator over all keys k with lo <= k < hi.
+    // Keys are yielded in ascending order following the next_leaf_id leaf chain.
+    // SCAN-03: Iterator is invalidated on any write after construction.
+    // This is documented behavior — no version check is implemented.
+    // Callers must not interleave writes with iteration.
+    Iterator scan(uint64_t lo, uint64_t hi);
+
 private:
     BufferPool<WAL_T>& pool_;
     WAL_T&             wal_;
@@ -199,6 +234,42 @@ private:
                             uint32_t left_child_id,
                             uint64_t fence_key,
                             uint32_t right_child_id);
+
+    // ── Delete helpers ────────────────────────────────────────────────────────
+    // findLeafWithChildIdx: like findLeaf, but also records the child index taken
+    // at each level as {parent_page_id, child_idx_in_parent} pairs.
+    uint32_t findLeafWithChildIdx(uint64_t key,
+                                  std::vector<std::pair<uint32_t, int>>& path);
+
+    // remove_from_leaf: remove key from the leaf identified by leaf_id.
+    // Returns true if found and removed, false if not found.
+    bool remove_from_leaf(uint32_t leaf_id, uint64_t key);
+
+    // find_child_idx_in_parent: scan parent's children array to find the slot
+    // containing child_id.  Returns -1 if not found.
+    int find_child_idx_in_parent(uint32_t parent_id, uint32_t child_id);
+
+    // redistribute_leaves: try to borrow an entry from a sibling leaf.
+    // child_idx is the index of the underfull leaf in parent.children[].
+    // Returns true if redistribution succeeded.
+    bool redistribute_leaves(uint32_t parent_id, int child_idx);
+
+    // merge_leaves: merge the underfull leaf at child_idx with an adjacent sibling.
+    // Removes the separator key from parent and marks the absorbed page as FREE.
+    void merge_leaves(uint32_t parent_id, int child_idx);
+
+    // fix_internal_underflow: propagate underflow up the path after a merge.
+    // path_with_idx[level] is the underflowing internal node (and how we got here).
+    void fix_internal_underflow(
+        std::vector<std::pair<uint32_t, int>>& path_with_idx, int level);
+
+    // redistribute_internal: try to borrow a key from a sibling internal node
+    // through the grandparent separator.  Returns true if succeeded.
+    bool redistribute_internal(uint32_t grandparent_id, int child_idx);
+
+    // merge_internal: merge internal node at child_idx with adjacent sibling,
+    // pulling down the grandparent separator key.
+    void merge_internal(uint32_t grandparent_id, int child_idx);
 };
 
 }  // namespace adapttree

@@ -5,7 +5,9 @@
 
 #include <filesystem>
 #include <algorithm>
+#include <map>
 #include <random>
+#include <set>
 #include <vector>
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -358,4 +360,248 @@ TEST_F(BPlusTreeTest, BULK04_KeyZeroInRandomBatch) {
     auto v0 = tree_->get(0);
     ASSERT_TRUE(v0.has_value());
     EXPECT_EQ(*v0, uint64_t{1});
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 5 — Delete and Range Scan tests (T1–T10)
+// ─────────────────────────────────────────────────────────────────────────────
+// SCAN-03: Iterator is invalidated on any write after construction.
+// This is documented behavior — no version check is implemented.
+// Callers must not interleave writes with iteration.
+
+// T1 — DeleteNonExistent
+TEST_F(BPlusTreeTest, T1_DeleteNonExistent) {
+    ASSERT_TRUE(tree_->insert(10, 100));
+    ASSERT_TRUE(tree_->insert(20, 200));
+    ASSERT_TRUE(tree_->insert(30, 300));
+
+    EXPECT_FALSE(tree_->remove(99));
+
+    EXPECT_TRUE(tree_->get(10).has_value());
+    EXPECT_TRUE(tree_->get(20).has_value());
+    EXPECT_TRUE(tree_->get(30).has_value());
+}
+
+// T2 — DeleteExistingKey
+TEST_F(BPlusTreeTest, T2_DeleteExistingKey) {
+    ASSERT_TRUE(tree_->insert(10, 100));
+    ASSERT_TRUE(tree_->insert(20, 200));
+    ASSERT_TRUE(tree_->insert(30, 300));
+
+    EXPECT_TRUE(tree_->remove(20));
+    EXPECT_FALSE(tree_->get(20).has_value());
+
+    auto v10 = tree_->get(10);
+    ASSERT_TRUE(v10.has_value());
+    EXPECT_EQ(*v10, uint64_t{100});
+
+    auto v30 = tree_->get(30);
+    ASSERT_TRUE(v30.has_value());
+    EXPECT_EQ(*v30, uint64_t{300});
+}
+
+// T3 — DeleteAllKeysEmptyTree
+TEST_F(BPlusTreeTest, T3_DeleteAllKeysEmptyTree) {
+    for (uint64_t k = 1; k <= 5; ++k) {
+        ASSERT_TRUE(tree_->insert(k, k * 10));
+    }
+    for (uint64_t k = 1; k <= 5; ++k) {
+        EXPECT_TRUE(tree_->remove(k)) << "remove(" << k << ") failed";
+    }
+    for (uint64_t k = 1; k <= 5; ++k) {
+        EXPECT_FALSE(tree_->get(k).has_value()) << "key=" << k << " still present";
+    }
+
+    auto it = tree_->scan(0, UINT64_MAX);
+    EXPECT_FALSE(it.valid()) << "scan of empty tree must be immediately invalid";
+}
+
+// T4 — DeleteTriggerRedistribute
+// Insert 1..201: leaf 1 gets 1..100 (100 entries), leaf 2 gets 101..201 (101 entries).
+// Delete key 100 from leaf 1 → leaf 1 has 99. Leaf 2 has 101 (>= SPLIT_HALF+1=101). Redistribute.
+TEST_F(BPlusTreeTest, T4_DeleteTriggerRedistribute) {
+    for (uint64_t k = 1; k <= 201; ++k) {
+        ASSERT_TRUE(tree_->insert(k, k));
+    }
+
+    // Delete key 100 from leaf 1 to trigger redistribution (leaf 1 drops to 99, leaf 2 has 101)
+    EXPECT_TRUE(tree_->remove(100));
+
+    // All surviving keys (1..99, 101..201) must be retrievable
+    for (uint64_t k = 1; k <= 201; ++k) {
+        if (k == 100) {
+            EXPECT_FALSE(tree_->get(k).has_value()) << "deleted key " << k << " still present";
+        } else {
+            auto v = tree_->get(k);
+            ASSERT_TRUE(v.has_value()) << "key=" << k << " missing after redistribute";
+            EXPECT_EQ(*v, k);
+        }
+    }
+
+    // scan(1, 202) should yield all 200 survivors in order
+    std::vector<uint64_t> scanned;
+    auto it = tree_->scan(1, 202);
+    while (it.valid()) {
+        scanned.push_back(it.key());
+        it.next();
+    }
+    EXPECT_EQ(scanned.size(), size_t{200});
+    for (size_t i = 0; i < scanned.size(); ++i) {
+        EXPECT_EQ(scanned[i], i < 99 ? (i + 1) : (i + 2));
+    }
+}
+
+// T5 — DeleteTriggerMerge
+// Insert 1..200 (2 leaves of 100 each). Delete key 200 → right has 99, left has 100 (no surplus). Merge.
+TEST_F(BPlusTreeTest, T5_DeleteTriggerMerge) {
+    for (uint64_t k = 1; k <= 200; ++k) {
+        ASSERT_TRUE(tree_->insert(k, k));
+    }
+
+    EXPECT_TRUE(tree_->remove(200));
+
+    // All keys 1..199 must be retrievable
+    for (uint64_t k = 1; k <= 199; ++k) {
+        auto v = tree_->get(k);
+        ASSERT_TRUE(v.has_value()) << "key=" << k << " missing after merge";
+        EXPECT_EQ(*v, k);
+    }
+    EXPECT_FALSE(tree_->get(200).has_value());
+
+    // scan yields 199 keys
+    std::vector<uint64_t> scanned;
+    auto it = tree_->scan(1, 201);
+    while (it.valid()) {
+        scanned.push_back(it.key());
+        it.next();
+    }
+    EXPECT_EQ(scanned.size(), size_t{199});
+}
+
+// T6 — DeleteTriggerRootCollapse
+// Insert 1..201: first split occurs at the 201st insert.
+// After insert: height=2, left leaf has 100 entries (1..100), right leaf has 101 entries (101..201).
+// Delete 201 → right leaf: 100 entries (at SPLIT_HALF threshold, no underflow yet).
+// Delete 200 → right leaf: 99 entries (underflow). Left has exactly 100 = SPLIT_HALF (no surplus).
+// Merge right into left → root internal node loses its only key → root collapse → height=1.
+TEST_F(BPlusTreeTest, T6_DeleteTriggerRootCollapse) {
+    for (uint64_t k = 1; k <= 201; ++k) {
+        ASSERT_TRUE(tree_->insert(k, k));
+    }
+    EXPECT_EQ(tree_->height(), uint32_t{2});
+
+    // First delete: right leaf 101→100 (at threshold, no underflow yet)
+    EXPECT_TRUE(tree_->remove(201));
+    EXPECT_EQ(tree_->height(), uint32_t{2});
+
+    // Second delete: right leaf 100→99 (underflow, no surplus on left) → merge → collapse
+    EXPECT_TRUE(tree_->remove(200));
+
+    // After merge and root collapse, height must drop to 1
+    EXPECT_EQ(tree_->height(), uint32_t{1});
+
+    // All 199 surviving keys (1..199) retrievable
+    for (uint64_t k = 1; k <= 199; ++k) {
+        auto v = tree_->get(k);
+        ASSERT_TRUE(v.has_value()) << "key=" << k << " missing after root collapse";
+        EXPECT_EQ(*v, k);
+    }
+    EXPECT_FALSE(tree_->get(200).has_value());
+    EXPECT_FALSE(tree_->get(201).has_value());
+}
+
+// T7 — ScanEmptyRange
+TEST_F(BPlusTreeTest, T7_ScanEmptyRange) {
+    ASSERT_TRUE(tree_->insert(10, 100));
+    ASSERT_TRUE(tree_->insert(20, 200));
+    ASSERT_TRUE(tree_->insert(30, 300));
+
+    auto it = tree_->scan(5, 9);  // [5,9) — no keys in this range
+    EXPECT_FALSE(it.valid());
+}
+
+// T8 — ScanSinglePage
+TEST_F(BPlusTreeTest, T8_ScanSinglePage) {
+    for (uint64_t k = 1; k <= 50; ++k) {
+        ASSERT_TRUE(tree_->insert(k, k * 2));
+    }
+
+    // scan(10, 31) yields keys 10,11,...,30 (21 keys)
+    std::vector<uint64_t> scanned;
+    auto it = tree_->scan(10, 31);
+    while (it.valid()) {
+        scanned.push_back(it.key());
+        it.next();
+    }
+
+    ASSERT_EQ(scanned.size(), size_t{21});
+    for (size_t i = 0; i < scanned.size(); ++i) {
+        EXPECT_EQ(scanned[i], uint64_t{10 + i});
+    }
+}
+
+// T9 — ScanMultiPage
+TEST_F(BPlusTreeTest, T9_ScanMultiPage) {
+    for (uint64_t k = 1; k <= 400; ++k) {
+        ASSERT_TRUE(tree_->insert(k, k));
+    }
+
+    // scan(95, 306) yields keys 95..305 (211 keys)
+    std::vector<uint64_t> scanned;
+    auto it = tree_->scan(95, 306);
+    while (it.valid()) {
+        scanned.push_back(it.key());
+        it.next();
+    }
+
+    ASSERT_EQ(scanned.size(), size_t{211});
+    for (size_t i = 0; i < scanned.size(); ++i) {
+        EXPECT_EQ(scanned[i], uint64_t{95 + i});
+    }
+}
+
+// T10 — FuzzerWithDelete
+TEST_F(BPlusTreeTest, T10_FuzzerWithDelete) {
+    std::mt19937_64 rng(42);
+    std::uniform_int_distribution<uint64_t> dist(0, UINT64_MAX);
+
+    std::map<uint64_t, uint64_t> reference;
+
+    // Insert 500 random keys
+    std::vector<uint64_t> all_keys;
+    while (static_cast<int>(reference.size()) < 500) {
+        uint64_t k = dist(rng);
+        uint64_t v = dist(rng);
+        if (reference.count(k)) continue;
+        bool ok = tree_->insert(k, v);
+        ASSERT_TRUE(ok);
+        reference[k] = v;
+        all_keys.push_back(k);
+    }
+
+    // Randomly delete ~200 keys
+    std::shuffle(all_keys.begin(), all_keys.end(), rng);
+    int to_delete = 200;
+    for (int i = 0; i < to_delete && i < static_cast<int>(all_keys.size()); ++i) {
+        uint64_t k = all_keys[i];
+        bool ok = tree_->remove(k);
+        EXPECT_TRUE(ok) << "remove(" << k << ") failed unexpectedly";
+        reference.erase(k);
+    }
+
+    // Point-query verification
+    for (auto& [k, v] : reference) {
+        auto got = tree_->get(k);
+        ASSERT_TRUE(got.has_value()) << "key=" << k << " missing";
+        EXPECT_EQ(*got, v);
+    }
+
+    // Scan verification: scan(0, UINT64_MAX) must match reference map
+    std::map<uint64_t, uint64_t> scanned_map;
+    auto it = tree_->scan(0, UINT64_MAX);
+    while (it.valid()) {
+        scanned_map[it.key()] = it.value();
+        it.next();
+    }
+    EXPECT_EQ(scanned_map, reference);
 }
