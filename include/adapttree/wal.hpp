@@ -2,6 +2,8 @@
 #include <cstdint>
 #include <cstddef>
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <functional>
 #include <mutex>
 #include <optional>
@@ -9,6 +11,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 // Forward declaration — WalRecord is defined later in this header.
@@ -89,11 +92,18 @@ struct WalRecord {
 // NullWAL::append(WalRecord&) — defined here after WalRecord is complete.
 inline uint64_t NullWAL::append(WalRecord& r) { r.lsn = UINT64_MAX; return UINT64_MAX; }
 
+// ── CheckpointPolicy ──────────────────────────────────────────────────────────
+
+struct CheckpointPolicy {
+    size_t   max_wal_bytes = 64ULL * 1024 * 1024;  // 64 MB
+    uint32_t interval_sec  = 30;
+};
+
 // ── Wal class ─────────────────────────────────────────────────────────────────
 
 class Wal {
 public:
-    explicit Wal(std::string_view path);
+    explicit Wal(std::string_view path, CheckpointPolicy policy = {});
     ~Wal();
 
     uint64_t append(WalRecord& record);
@@ -103,6 +113,9 @@ public:
     uint64_t current_lsn() const { return next_lsn_.load(std::memory_order_acquire) - 1; }
     uint64_t last_checkpoint_lsn() const;
     std::vector<WalRecord> read_all() const;
+    bool checkpoint_triggered() const {
+        return bytes_since_checkpoint_.load(std::memory_order_relaxed) >= policy_.max_wal_bytes;
+    }
 
 private:
     std::string path_;
@@ -110,4 +123,50 @@ private:
     std::atomic<uint64_t> next_lsn_{1};
     std::atomic<uint64_t> flushed_lsn_{0};
     mutable std::mutex append_mutex_;
+    std::mutex checkpoint_mutex_;
+
+    CheckpointPolicy policy_;
+    std::atomic<size_t> bytes_since_checkpoint_{0};
+    std::atomic<bool> dirty_since_checkpoint_{false};
+    std::chrono::steady_clock::time_point last_checkpoint_time_;
+    std::thread bg_thread_;
+    std::atomic<bool> stop_flag_{false};
+    std::condition_variable cv_;
+    std::mutex cv_mutex_;
+};
+
+// ── ARIES Recovery ────────────────────────────────────────────────────────────
+
+enum class TxnStatus { WINNER, LOSER };
+
+struct RecoveryResult {
+    uint64_t redo_from_lsn = 0;
+    std::unordered_map<uint64_t, TxnStatus> txn_table;
+    std::vector<WalRecord> redo_log;
+    std::vector<WalRecord> undo_log;
+};
+
+class Recovery {
+public:
+    explicit Recovery(Wal& wal);
+
+    // Phase 1: scan log from last_checkpoint_lsn, classify txns
+    RecoveryResult analyze();
+
+    // Phase 2: replay redo_log, skip pages where page_lsn >= record.lsn
+    void redo(const RecoveryResult& result,
+              std::function<uint64_t(uint32_t page_id)> page_lsn_provider,
+              std::function<void(const WalRecord&)> redo_applier);
+
+    // Phase 3: undo loser records in reverse LSN order
+    void undo(const RecoveryResult& result,
+              std::function<void(const WalRecord&)> undo_applier);
+
+    // Convenience: all three phases
+    void run(std::function<uint64_t(uint32_t)> page_lsn_provider,
+             std::function<void(const WalRecord&)> redo_applier,
+             std::function<void(const WalRecord&)> undo_applier);
+
+private:
+    Wal& wal_;
 };

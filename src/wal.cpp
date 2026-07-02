@@ -88,12 +88,43 @@ std::optional<WalRecord> WalRecord::deserialize(std::span<const uint8_t> buf) {
 
 // ── Wal ──────────────────────────────────────────────────────────────────────
 
-Wal::Wal(std::string_view path) : path_(path) {
+Wal::Wal(std::string_view path, CheckpointPolicy policy)
+    : path_(path), policy_(policy),
+      last_checkpoint_time_(std::chrono::steady_clock::now())
+{
     fd_ = open(path_.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0644);
     if (fd_ < 0) throw std::runtime_error("Wal: failed to open " + path_);
+
+    bg_thread_ = std::thread([this]() {
+        while (!stop_flag_.load(std::memory_order_acquire)) {
+            std::unique_lock<std::mutex> lock(cv_mutex_);
+            cv_.wait_for(lock, std::chrono::seconds(1),
+                         [this]{ return stop_flag_.load(std::memory_order_acquire); });
+            if (stop_flag_.load(std::memory_order_acquire)) break;
+
+            auto now = std::chrono::steady_clock::now();
+            auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+                               now - last_checkpoint_time_).count();
+
+            if (dirty_since_checkpoint_.load(std::memory_order_relaxed) &&
+                (bytes_since_checkpoint_.load(std::memory_order_relaxed) >= policy_.max_wal_bytes ||
+                 static_cast<uint32_t>(elapsed) >= policy_.interval_sec)) {
+                checkpoint([]{});
+                bytes_since_checkpoint_.store(0, std::memory_order_relaxed);
+                last_checkpoint_time_ = std::chrono::steady_clock::now();
+            }
+        }
+    });
 }
 
 Wal::~Wal() {
+    stop_flag_.store(true, std::memory_order_release);
+    cv_.notify_all();
+    if (bg_thread_.joinable()) bg_thread_.join();
+    // Safe: bg thread is dead, no contention on append_mutex_ or checkpoint_mutex_
+    // Only write shutdown checkpoint if there are un-checkpointed records
+    if (dirty_since_checkpoint_.load(std::memory_order_relaxed))
+        checkpoint([]{});
     if (fd_ >= 0) { close(fd_); fd_ = -1; }
 }
 
@@ -102,6 +133,8 @@ uint64_t Wal::append(WalRecord& record) {
     uint64_t lsn = next_lsn_.fetch_add(1, std::memory_order_relaxed);
     record.lsn = lsn;
     auto buf = record.serialize();
+    bytes_since_checkpoint_.fetch_add(buf.size(), std::memory_order_relaxed);
+    dirty_since_checkpoint_.store(true, std::memory_order_relaxed);
     const uint8_t* ptr = buf.data();
     size_t remaining = buf.size();
     while (remaining > 0) {
@@ -127,6 +160,7 @@ void Wal::flush_to(uint64_t lsn) {
 }
 
 void Wal::checkpoint(std::function<void()> flush_dirty_pages) {
+    std::lock_guard<std::mutex> ckpt_lock(checkpoint_mutex_);
     // Step 1: append CHECKPOINT record
     WalRecord rec;
     rec.record_type = WalRecordType::CHECKPOINT;
@@ -159,6 +193,7 @@ void Wal::checkpoint(std::function<void()> flush_dirty_pages) {
     }
     fdatasync(cfd);
     close(cfd);
+    dirty_since_checkpoint_.store(false, std::memory_order_relaxed);
 }
 
 uint64_t Wal::last_checkpoint_lsn() const {
@@ -204,4 +239,78 @@ std::vector<WalRecord> Wal::read_all() const {
 
     close(rfd);
     return records;
+}
+
+// ── Recovery ──────────────────────────────────────────────────────────────────
+
+Recovery::Recovery(Wal& wal) : wal_(wal) {}
+
+RecoveryResult Recovery::analyze() {
+    RecoveryResult result;
+    result.redo_from_lsn = wal_.last_checkpoint_lsn();
+
+    auto all_records = wal_.read_all();
+
+    // Build txn_table: scan all records
+    std::unordered_map<uint64_t, TxnStatus> status;
+    for (auto& r : all_records) {
+        if (r.record_type == WalRecordType::COMMIT) {
+            status[r.txn_id] = TxnStatus::WINNER;
+        } else if (r.record_type == WalRecordType::ABORT) {
+            status[r.txn_id] = TxnStatus::LOSER;
+        } else if (r.record_type == WalRecordType::CHECKPOINT) {
+            // no txn_id to update
+        } else {
+            // Data record: add to table as LOSER if not yet seen
+            if (status.find(r.txn_id) == status.end())
+                status[r.txn_id] = TxnStatus::LOSER;
+        }
+    }
+    result.txn_table = status;
+
+    // redo_log: records with lsn >= redo_from_lsn (or all if no checkpoint)
+    for (auto& r : all_records) {
+        if (result.redo_from_lsn == 0 || r.lsn >= result.redo_from_lsn)
+            result.redo_log.push_back(r);
+    }
+
+    // undo_log: loser data records in REVERSE LSN order
+    for (auto it = all_records.rbegin(); it != all_records.rend(); ++it) {
+        auto& r = *it;
+        if (r.record_type == WalRecordType::INSERT ||
+            r.record_type == WalRecordType::UPDATE ||
+            r.record_type == WalRecordType::DELETE) {
+            auto sit = status.find(r.txn_id);
+            if (sit != status.end() && sit->second == TxnStatus::LOSER)
+                result.undo_log.push_back(r);
+        }
+    }
+
+    return result;
+}
+
+void Recovery::redo(const RecoveryResult& result,
+                    std::function<uint64_t(uint32_t)> page_lsn_provider,
+                    std::function<void(const WalRecord&)> redo_applier) {
+    for (auto& r : result.redo_log) {
+        if (r.record_type == WalRecordType::CHECKPOINT ||
+            r.record_type == WalRecordType::COMMIT ||
+            r.record_type == WalRecordType::ABORT) continue;
+        if (page_lsn_provider(r.page_id) >= r.lsn) continue;
+        redo_applier(r);
+    }
+}
+
+void Recovery::undo(const RecoveryResult& result,
+                    std::function<void(const WalRecord&)> undo_applier) {
+    for (auto& r : result.undo_log)
+        undo_applier(r);
+}
+
+void Recovery::run(std::function<uint64_t(uint32_t)> page_lsn_provider,
+                   std::function<void(const WalRecord&)> redo_applier,
+                   std::function<void(const WalRecord&)> undo_applier) {
+    auto result = analyze();
+    redo(result, page_lsn_provider, redo_applier);
+    undo(result, undo_applier);
 }
