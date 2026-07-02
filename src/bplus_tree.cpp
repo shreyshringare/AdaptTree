@@ -504,10 +504,24 @@ bool BPlusTree<WAL_T>::insert(uint64_t key, uint64_t value)
                 left_kp.push_back({all_entries[i].key, i});
             }
             auto left_segs = pgm_builder_.fit(left_kp);
-            if (!left_segs.empty()) {
+            // Only store a model when fit() produces exactly one segment.
+            // Multiple segments mean the key distribution is non-linear; we skip
+            // model storage and leave has_model=0 so search falls back to binary search.
+            if (left_segs.size() == 1) {
                 leaf->model.learnedSegmentMut() = left_segs[0];
                 leaf->model.has_model                   = 1;
                 leaf->model.inserts_since_model_rebuild = 0;
+#ifndef NDEBUG
+                // LEARN-02 / T-09-01: post-split validation — every training key must
+                // be predicted within error_bound slots of its actual rank.
+                const LearnedSegment& dbg_seg = leaf->model.learnedSegment();
+                for (uint32_t i = 0; i < SPLIT_HALF; ++i) {
+                    uint32_t predicted = dbg_seg.predict(all_entries[i].key, SPLIT_HALF);
+                    int64_t  diff      = static_cast<int64_t>(predicted) - static_cast<int64_t>(i);
+                    assert(diff >= -static_cast<int64_t>(dbg_seg.error_bound) &&
+                           diff <=  static_cast<int64_t>(dbg_seg.error_bound));
+                }
+#endif
             }
         }
         leaf_g->markDirty();
@@ -563,10 +577,21 @@ bool BPlusTree<WAL_T>::insert(uint64_t key, uint64_t value)
                 right_kp.push_back({all_entries[SPLIT_HALF + i].key, i});
             }
             auto right_segs = pgm_builder_.fit(right_kp);
-            if (!right_segs.empty()) {
+            // Only store a model when fit() produces exactly one segment.
+            if (right_segs.size() == 1) {
                 right->model.learnedSegmentMut() = right_segs[0];
                 right->model.has_model                   = 1;
                 right->model.inserts_since_model_rebuild = 0;
+#ifndef NDEBUG
+                // LEARN-02 / T-09-01: post-split validation for right child.
+                const LearnedSegment& dbg_seg = right->model.learnedSegment();
+                for (uint32_t i = 0; i < right_count; ++i) {
+                    uint32_t predicted = dbg_seg.predict(all_entries[SPLIT_HALF + i].key, right_count);
+                    int64_t  diff      = static_cast<int64_t>(predicted) - static_cast<int64_t>(i);
+                    assert(diff >= -static_cast<int64_t>(dbg_seg.error_bound) &&
+                           diff <=  static_cast<int64_t>(dbg_seg.error_bound));
+                }
+#endif
             }
         }
         right_g->markDirty();
