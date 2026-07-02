@@ -56,6 +56,49 @@ target_link_libraries(differential_fuzzer PRIVATE
   adapttree      # The AdaptTree static lib target (page + disk_manager)
 )
 
+# ---------- Differential fuzzer — learned index ON (FUZZ-06, FUZZ-07) ----------
+add_executable(differential_fuzzer_learned differential_fuzzer_learned.cpp)
+
+target_sources(differential_fuzzer_learned PRIVATE
+  ${CMAKE_SOURCE_DIR}/src/bplus_tree.cpp
+  ${CMAKE_SOURCE_DIR}/src/buffer_pool.cpp
+  ${CMAKE_SOURCE_DIR}/src/pgm_builder.cpp
+)
+
+target_compile_options(differential_fuzzer_learned PRIVATE
+  -g
+  -O1
+  -fsanitize=fuzzer,address,undefined
+  -fno-sanitize=vptr
+  -fno-omit-frame-pointer
+  -fno-sanitize-recover=undefined
+  -std=c++20
+)
+
+target_link_options(differential_fuzzer_learned PRIVATE
+  -fsanitize=fuzzer,address,undefined
+  -fno-sanitize=vptr
+)
+
+target_include_directories(differential_fuzzer_learned PRIVATE
+  ${CMAKE_SOURCE_DIR}/include
+  ${CMAKE_SOURCE_DIR}/fuzz
+  third_party/
+)
+
+target_link_libraries(differential_fuzzer_learned PRIVATE
+  sqlite3
+  adapttree
+)
+
+# ---------- Base fuzzer: add pgm_builder source (Phase 9 integration) ----------
+target_sources(differential_fuzzer PRIVATE
+  ${CMAKE_SOURCE_DIR}/src/pgm_builder.cpp
+)
+target_include_directories(differential_fuzzer PRIVATE
+  ${CMAKE_SOURCE_DIR}/fuzz
+)
+
 # ---------- Corpus directory ----------
 # fuzz/corpus/ must exist; libFuzzer reads seeds from it.
 # Seeds are committed binary files, not generated at build time.
