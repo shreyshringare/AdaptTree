@@ -61,3 +61,14 @@ target_include_directories(test_learned_integration_gaps PRIVATE ../include)
 target_link_libraries(test_learned_integration_gaps PRIVATE pgm_builder GTest::gtest_main)
 target_compile_features(test_learned_integration_gaps PRIVATE cxx_std_20)
 gtest_discover_tests(test_learned_integration_gaps)
+
+add_executable(test_mvcc_bptree_integration
+  test_mvcc_bptree_integration.cpp
+  bplus_tree_mvcc_inst.cpp
+  ../src/buffer_pool.cpp
+  ../src/mvcc.cpp
+)
+target_include_directories(test_mvcc_bptree_integration PRIVATE ../include)
+target_link_libraries(test_mvcc_bptree_integration PRIVATE pgm_builder GTest::gtest_main)
+target_compile_features(test_mvcc_bptree_integration PRIVATE cxx_std_20)
+gtest_discover_tests(test_mvcc_bptree_integration)
