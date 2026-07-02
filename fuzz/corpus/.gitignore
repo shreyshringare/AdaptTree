@@ -1,0 +1,6 @@
+# Committed seed files only — libFuzzer-generated corpus entries are NOT committed.
+# The root .gitignore has `corpus/` to block auto-generated corpora; this file
+# selectively allows the deterministic seeds that are part of the test suite.
+*
+!.gitignore
+!seed_*.bin
