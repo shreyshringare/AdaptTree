@@ -62,8 +62,8 @@ TEST(BPlusTreeLayoutTest, LAYOUT04_MetaPageIsPageSize) {
     EXPECT_EQ(sizeof(adapttree::MetaPage), adapttree::PAGE_SIZE);
 }
 
-TEST(BPlusTreeLayoutTest, LAYOUT05_LeafEntryIs16Bytes) {
-    EXPECT_EQ(sizeof(adapttree::LeafEntry), size_t{16});
+TEST(BPlusTreeLayoutTest, LAYOUT05_LeafEntryIs24Bytes) {
+    EXPECT_EQ(sizeof(adapttree::LeafEntry), size_t{24});
 }
 
 TEST(BPlusTreeLayoutTest, LAYOUT06_BPHeaderFieldOffsets) {
@@ -479,35 +479,35 @@ TEST_F(BPlusTreeTest, T5_DeleteTriggerMerge) {
 }
 
 // T6 — DeleteTriggerRootCollapse
-// Insert 1..201: first split occurs at the 201st insert.
-// After insert: height=2, left leaf has 100 entries (1..100), right leaf has 101 entries (101..201).
-// Delete 201 → right leaf: 100 entries (at SPLIT_HALF threshold, no underflow yet).
-// Delete 200 → right leaf: 99 entries (underflow). Left has exactly 100 = SPLIT_HALF (no surplus).
+// Insert 1..169: first split occurs at the 169th insert (ORDER=168).
+// After insert: height=2, left leaf has 84 entries (1..84), right leaf has 85 entries (85..169).
+// Delete 169 → right leaf: 84 entries (at SPLIT_HALF threshold, no underflow yet).
+// Delete 168 → right leaf: 83 entries (underflow). Left has exactly 84 = SPLIT_HALF (no surplus).
 // Merge right into left → root internal node loses its only key → root collapse → height=1.
 TEST_F(BPlusTreeTest, T6_DeleteTriggerRootCollapse) {
-    for (uint64_t k = 1; k <= 201; ++k) {
+    for (uint64_t k = 1; k <= 169; ++k) {
         ASSERT_TRUE(tree_->insert(k, k));
     }
     EXPECT_EQ(tree_->height(), uint32_t{2});
 
-    // First delete: right leaf 101→100 (at threshold, no underflow yet)
-    EXPECT_TRUE(tree_->remove(201));
+    // First delete: right leaf 85→84 (at threshold, no underflow yet)
+    EXPECT_TRUE(tree_->remove(169));
     EXPECT_EQ(tree_->height(), uint32_t{2});
 
-    // Second delete: right leaf 100→99 (underflow, no surplus on left) → merge → collapse
-    EXPECT_TRUE(tree_->remove(200));
+    // Second delete: right leaf 84→83 (underflow, no surplus on left) → merge → collapse
+    EXPECT_TRUE(tree_->remove(168));
 
     // After merge and root collapse, height must drop to 1
     EXPECT_EQ(tree_->height(), uint32_t{1});
 
-    // All 199 surviving keys (1..199) retrievable
-    for (uint64_t k = 1; k <= 199; ++k) {
+    // All 167 surviving keys (1..167) retrievable
+    for (uint64_t k = 1; k <= 167; ++k) {
         auto v = tree_->get(k);
         ASSERT_TRUE(v.has_value()) << "key=" << k << " missing after root collapse";
         EXPECT_EQ(*v, k);
     }
-    EXPECT_FALSE(tree_->get(200).has_value());
-    EXPECT_FALSE(tree_->get(201).has_value());
+    EXPECT_FALSE(tree_->get(168).has_value());
+    EXPECT_FALSE(tree_->get(169).has_value());
 }
 
 // T7 — ScanEmptyRange

@@ -39,8 +39,8 @@ struct TrivialMvcc {
 // ORDER is the maximum number of entries in a leaf node and the maximum number
 // of keys in an internal node (which has ORDER+1 children).
 // A node is full when it reaches ORDER entries; it is split after insertion.
-inline constexpr uint32_t ORDER        = 200;
-inline constexpr uint32_t SPLIT_HALF   = 100;    // entries kept in left node after split
+inline constexpr uint32_t ORDER        = 168;
+inline constexpr uint32_t SPLIT_HALF   = 84;     // entries kept in left node after split
 inline constexpr uint32_t META_PAGE_ID = 0;      // page 0 is always the meta page
 
 // INVALID_PAGE_ID is already defined in buffer_pool.hpp (= UINT32_MAX).
@@ -100,13 +100,14 @@ static_assert(offsetof(BPHeader, next_leaf_id) == 16);
 static_assert(offsetof(BPHeader, lsn)          == 20);
 
 // ── Leaf entry ────────────────────────────────────────────────────────────────
-// Each leaf stores up to ORDER fixed-size (key, value) pairs sorted by key.
+// Each leaf stores up to ORDER fixed-size (key, value, commit_ts) triples sorted by key.
 // Direct array layout (not slotted) because entries are uniform size.
 struct LeafEntry {
     uint64_t key;
     uint64_t value;
+    uint64_t commit_ts = 0;  // Wave 2 stamps real write_ts; TrivialMvcc ignores it
 };
-static_assert(sizeof(LeafEntry) == 16);
+static_assert(sizeof(LeafEntry) == 24);
 
 // ── LeafModelArea ─────────────────────────────────────────────────────────────
 // 32-byte block embedded in every LeafNode between the header and entries.
@@ -151,16 +152,16 @@ static_assert(sizeof(LearnedSegment) <= 28,
 // Layout:
 //   [0..31]    header  (BPHeader, 32 bytes)
 //   [32..63]   model   (LeafModelArea, 32 bytes)
-//   [64..3263] entries (LeafEntry[200], 3200 bytes)
-//   [3264..4095] _padding (832 bytes)
+//   [64..4095] entries (LeafEntry[168], 4032 bytes)
+//   _padding is 0 bytes (perfect fit: 32+32+168*24 = 4096)
 struct LeafNode {
     BPHeader      header;                       // 32 bytes
     LeafModelArea model;                        // 32 bytes (LEARN-01)
-    LeafEntry     entries[ORDER];               // 200 * 16 = 3200 bytes
+    LeafEntry     entries[ORDER];               // 168 * 24 = 4032 bytes
     uint8_t       _padding[PAGE_SIZE
                             - sizeof(BPHeader)
                             - sizeof(LeafModelArea)
-                            - ORDER * sizeof(LeafEntry)];  // 832 bytes
+                            - ORDER * sizeof(LeafEntry)];  // 0 bytes
 };
 static_assert(sizeof(LeafNode) == PAGE_SIZE,
               "LeafNode must be exactly PAGE_SIZE bytes");
