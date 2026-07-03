@@ -226,6 +226,11 @@ public:
     // May trigger one or more page splits; amortised O(log n) buffer-pool round trips.
     bool insert(uint64_t key, uint64_t value);
 
+    // Update value for an existing key.  Archives the old (value, commit_ts) via
+    // mvcc_.archive_version() before overwriting with new_value and a fresh commit_ts.
+    // Returns false if the key does not exist (no insert is performed).
+    bool update(uint64_t key, uint64_t new_value);
+
     // Look up key.  Returns the associated value, or nullopt if not found.
     std::optional<uint64_t> get(uint64_t key);
 

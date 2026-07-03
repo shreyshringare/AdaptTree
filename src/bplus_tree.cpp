@@ -699,6 +699,54 @@ bool BPlusTree<WAL_T, MVCC_T>::insert(uint64_t key, uint64_t value)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// update()
+// Archives the old version via mvcc_.archive_version() then overwrites in-place.
+// ─────────────────────────────────────────────────────────────────────────────
+
+template <typename WAL_T, typename MVCC_T>
+bool BPlusTree<WAL_T, MVCC_T>::update(uint64_t key, uint64_t new_value)
+{
+    std::vector<uint32_t> path;
+    uint32_t leaf_id = findLeaf(key, path);
+
+    auto leaf_g = pool_.fetchPage(leaf_id);
+    assert(leaf_g.has_value());
+    auto* leaf = reinterpret_cast<LeafNode*>(leaf_g->data());
+
+    int slot_idx = findSlotInLeaf(leaf, key);
+    if (slot_idx < 0) {
+        return false;   // key not found — no insert
+    }
+
+    // Archive old version BEFORE overwriting (slot_idx stable for in-place update)
+    uint64_t old_value     = leaf->entries[slot_idx].value;
+    uint64_t old_commit_ts = leaf->entries[slot_idx].commit_ts;
+    uint64_t page_id       = leaf->header.page_id;
+    mvcc_.archive_version(page_id, static_cast<uint32_t>(slot_idx),
+                          old_value, old_commit_ts);
+
+    // Assign new value and fresh commit_ts
+    auto txn = mvcc_.begin();
+    mvcc_.commit(txn);
+    leaf->entries[slot_idx].value     = new_value;
+    leaf->entries[slot_idx].commit_ts = txn.write_ts;
+
+    // WAL after-image (includes updated value and commit_ts)
+    WalRecord wal_rec;
+    wal_rec.txn_id      = next_txn_id_.fetch_add(1, std::memory_order_relaxed);
+    wal_rec.page_id     = leaf_id;
+    wal_rec.record_type = WalRecordType::INSERT;
+    const auto* _pg = reinterpret_cast<const uint8_t*>(leaf);
+    wal_rec.redo_data.assign(_pg, _pg + PAGE_SIZE);
+    wal_rec.redo_len = static_cast<uint16_t>(PAGE_SIZE);
+    wal_rec.undo_len = 0;
+    leaf->header.lsn = wal_.append(wal_rec);
+    leaf_g->markDirty();
+
+    return true;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Phase 5 — Delete helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
