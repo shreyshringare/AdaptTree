@@ -82,3 +82,13 @@ target_include_directories(test_bplustree_counters PRIVATE ../include)
 target_link_libraries(test_bplustree_counters PRIVATE pgm_builder GTest::gtest_main)
 target_compile_features(test_bplustree_counters PRIVATE cxx_std_20)
 gtest_discover_tests(test_bplustree_counters)
+
+add_executable(wal_crash_recovery_tests
+  test_wal_crash_recovery.cpp
+  bplus_tree_wal_inst.cpp
+  ../src/buffer_pool.cpp
+)
+target_include_directories(wal_crash_recovery_tests PRIVATE ../include .)
+target_link_libraries(wal_crash_recovery_tests PRIVATE adapttree pgm_builder GTest::gtest_main)
+target_compile_features(wal_crash_recovery_tests PRIVATE cxx_std_20)
+gtest_discover_tests(wal_crash_recovery_tests)
