@@ -779,7 +779,10 @@ uint32_t BPlusTree<WAL_T, MVCC_T>::findLeafWithChildIdx(
     }
 }
 
-// remove_from_leaf: compact-shift deletion in a leaf node.
+// remove_from_leaf: deletion in a leaf node.
+// TrivialMvcc path: compact-shift physical delete (preserves all structural delete/rebalance tests).
+// MVCC path: write tombstone in-place (value=TOMBSTONE_VALUE, commit_ts=write_ts); num_slots
+//            is NOT decremented so the slot remains visible to older snapshots via version chain.
 template <typename WAL_T, typename MVCC_T>
 bool BPlusTree<WAL_T, MVCC_T>::remove_from_leaf(uint32_t leaf_id, uint64_t key)
 {
@@ -790,14 +793,26 @@ bool BPlusTree<WAL_T, MVCC_T>::remove_from_leaf(uint32_t leaf_id, uint64_t key)
     int idx = findSlotInLeaf(leaf, key);
     if (idx < 0) return false;
 
-    int n = static_cast<int>(leaf->header.num_slots);
-    if (idx < n - 1) {
-        std::memmove(&leaf->entries[idx], &leaf->entries[idx + 1],
-                     static_cast<size_t>(n - 1 - idx) * sizeof(LeafEntry));
+    if constexpr (std::is_same_v<MVCC_T, TrivialMvcc>) {
+        // Physical compact-shift deletion — preserves structural invariants for tests.
+        int n = static_cast<int>(leaf->header.num_slots);
+        if (idx < n - 1) {
+            std::memmove(&leaf->entries[idx], &leaf->entries[idx + 1],
+                         static_cast<size_t>(n - 1 - idx) * sizeof(LeafEntry));
+        }
+        leaf->header.num_slots = static_cast<uint16_t>(n - 1);
+        { WalRecord _r; _r.record_type = WalRecordType::DELETE; _r.page_id = leaf_id; const auto* _pg = reinterpret_cast<const uint8_t*>(leaf); _r.redo_data.assign(_pg, _pg + PAGE_SIZE); _r.redo_len = static_cast<uint16_t>(PAGE_SIZE); _r.undo_len = 0; leaf->header.lsn = wal_.append(_r); }
+        g->markDirty();
+    } else {
+        // MVCC tombstone write: overwrite value in-place, stamp commit_ts.
+        // num_slots is NOT decremented — slot stays so old snapshots can still find it.
+        auto txn = mvcc_.begin();
+        mvcc_.commit(txn);
+        leaf->entries[idx].value     = TOMBSTONE_VALUE;
+        leaf->entries[idx].commit_ts = txn.write_ts;
+        { WalRecord _r; _r.record_type = WalRecordType::DELETE; _r.page_id = leaf_id; const auto* _pg = reinterpret_cast<const uint8_t*>(leaf); _r.redo_data.assign(_pg, _pg + PAGE_SIZE); _r.redo_len = static_cast<uint16_t>(PAGE_SIZE); _r.undo_len = 0; leaf->header.lsn = wal_.append(_r); }
+        g->markDirty();
     }
-    leaf->header.num_slots = static_cast<uint16_t>(n - 1);
-    { WalRecord _r; _r.record_type = WalRecordType::DELETE; _r.page_id = leaf_id; const auto* _pg = reinterpret_cast<const uint8_t*>(leaf); _r.redo_data.assign(_pg, _pg + PAGE_SIZE); _r.redo_len = static_cast<uint16_t>(PAGE_SIZE); _r.undo_len = 0; leaf->header.lsn = wal_.append(_r); }
-    g->markDirty();
     return true;
 }
 
@@ -1299,11 +1314,12 @@ void BPlusTree<WAL_T, MVCC_T>::Iterator::next()
 }
 
 template <typename WAL_T, typename MVCC_T>
-typename BPlusTree<WAL_T, MVCC_T>::Iterator BPlusTree<WAL_T, MVCC_T>::scan(uint64_t lo, uint64_t hi)
+typename BPlusTree<WAL_T, MVCC_T>::Iterator BPlusTree<WAL_T, MVCC_T>::scan(uint64_t lo, uint64_t hi, uint64_t snapshot_ts)
 {
     Iterator it;
     it.tree_            = this;
     it.hi_              = hi;
+    it.snapshot_ts_     = snapshot_ts;
     it.valid_           = false;
     it.slot_idx_        = 0;
     it.current_leaf_id_ = INVALID_PAGE_ID;

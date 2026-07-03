@@ -43,6 +43,11 @@ inline constexpr uint32_t ORDER        = 168;
 inline constexpr uint32_t SPLIT_HALF   = 84;     // entries kept in left node after split
 inline constexpr uint32_t META_PAGE_ID = 0;      // page 0 is always the meta page
 
+// Reserved sentinel — never store UINT64_MAX as a user value.
+// MVCC delete writes this value in-place so old snapshots can still read the pre-delete
+// value from the version chain while new snapshots see nullopt.
+inline constexpr uint64_t TOMBSTONE_VALUE = UINT64_MAX;
+
 // INVALID_PAGE_ID is already defined in buffer_pool.hpp (= UINT32_MAX).
 // Use it throughout — do not redefine.
 
@@ -278,17 +283,20 @@ public:
         uint32_t          current_leaf_id_;
         int               slot_idx_;
         uint64_t          hi_;
+        uint64_t          snapshot_ts_;   // MVCC snapshot; entries with commit_ts > snapshot_ts are skipped
         bool              valid_;
 
         void advance_to_next_valid();
     };
 
-    // scan(lo, hi): returns an Iterator over all keys k with lo <= k < hi.
-    // Keys are yielded in ascending order following the next_leaf_id leaf chain.
+    // scan(lo, hi, snapshot_ts): returns an Iterator over all keys k with lo <= k < hi
+    // that are visible under snapshot_ts.  Tombstones (value == TOMBSTONE_VALUE) and
+    // entries not yet committed at snapshot_ts are automatically skipped.
+    // Defaults to UINT64_MAX (all committed data visible — backward-compatible).
     // SCAN-03: Iterator is invalidated on any write after construction.
     // This is documented behavior — no version check is implemented.
     // Callers must not interleave writes with iteration.
-    Iterator scan(uint64_t lo, uint64_t hi);
+    Iterator scan(uint64_t lo, uint64_t hi, uint64_t snapshot_ts = UINT64_MAX);
 
 private:
     BufferPool<WAL_T>& pool_;
