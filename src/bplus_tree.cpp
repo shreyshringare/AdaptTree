@@ -495,7 +495,7 @@ bool BPlusTree<WAL_T, MVCC_T>::insert(uint64_t key, uint64_t value)
         int insert_pos = 0;
         int found = findSlotInLeaf(leaf, key, &insert_pos);
         if (found >= 0) {
-            // Future UPDATE path: mvcc_.archive_version(leaf_id, found, leaf->entries[found].value, 0);
+            // Overwrites handled by update() — see below
             return false;   // duplicate key
         }
 
@@ -508,7 +508,11 @@ bool BPlusTree<WAL_T, MVCC_T>::insert(uint64_t key, uint64_t value)
                              &leaf->entries[insert_pos],
                              static_cast<size_t>(n - insert_pos) * sizeof(LeafEntry));
             }
-            leaf->entries[insert_pos] = {key, value};
+            LeafEntry new_entry{key, value, 0};
+            auto txn = mvcc_.begin();
+            mvcc_.commit(txn);
+            new_entry.commit_ts = txn.write_ts;
+            leaf->entries[insert_pos] = new_entry;
             leaf->header.num_slots    = static_cast<uint16_t>(n + 1);
             // LEARN-05: track staleness; saturate at UINT16_MAX
             if (leaf->model.has_model &&
@@ -538,7 +542,13 @@ bool BPlusTree<WAL_T, MVCC_T>::insert(uint64_t key, uint64_t value)
                          &all_entries[insert_pos],
                          static_cast<size_t>(n - insert_pos) * sizeof(LeafEntry));
         }
-        all_entries[insert_pos] = {key, value};
+        {
+            LeafEntry split_entry{key, value, 0};
+            auto txn = mvcc_.begin();
+            mvcc_.commit(txn);
+            split_entry.commit_ts = txn.write_ts;
+            all_entries[insert_pos] = split_entry;
+        }
 
         // Write all ORDER+1 entries back into the leaf (the array can hold ORDER+1
         // because we defined entries[ORDER] which is exactly ORDER slots — but we

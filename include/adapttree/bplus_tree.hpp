@@ -21,7 +21,7 @@ namespace adapttree {
 // Passes commit_ts=0 for all operations (no per-slot version tracking).
 // For full snapshot isolation, LeafEntry must store commit_ts alongside value.
 struct TrivialMvcc {
-    struct Txn { uint64_t txn_id = 1; uint64_t read_ts = UINT64_MAX; };
+    struct Txn { uint64_t txn_id = 1; uint64_t read_ts = UINT64_MAX; uint64_t write_ts = 0; };
     Txn  begin()                    { return {}; }
     void commit(Txn&)               {}
     void abort(Txn&)                {}
