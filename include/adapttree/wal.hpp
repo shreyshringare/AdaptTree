@@ -13,6 +13,7 @@
 #include <thread>
 #include <unordered_map>
 #include <vector>
+#include "adapttree/buffer_pool.hpp"
 
 // Forward declaration — WalRecord is defined later in this header.
 struct WalRecord;
@@ -116,6 +117,11 @@ public:
     bool checkpoint_triggered() const {
         return bytes_since_checkpoint_.load(std::memory_order_relaxed) >= policy_.max_wal_bytes;
     }
+
+    // Replay all committed WAL records to disk. Call after a crash before opening
+    // a new BPlusTree on the same files. For each data record with redo_len ==
+    // PAGE_SIZE where the on-disk page_lsn < record.lsn, writes redo_data to disk.
+    void recover_to_disk(adapttree::DiskManager& dm);
 
 private:
     std::string path_;

@@ -1,4 +1,5 @@
 #include "adapttree/wal.hpp"
+#include "adapttree/buffer_pool.hpp"
 
 #include <array>
 #include <cstring>
@@ -313,4 +314,37 @@ void Recovery::run(std::function<uint64_t(uint32_t)> page_lsn_provider,
     auto result = analyze();
     redo(result, page_lsn_provider, redo_applier);
     undo(result, undo_applier);
+}
+
+void Wal::recover_to_disk(adapttree::DiskManager& dm) {
+    Recovery recovery(*this);
+    RecoveryResult result = recovery.analyze();
+
+    std::vector<std::byte> disk_buf(adapttree::PAGE_SIZE);
+
+    for (const auto& rec : result.redo_log) {
+        if (rec.record_type == WalRecordType::CHECKPOINT ||
+            rec.record_type == WalRecordType::COMMIT ||
+            rec.record_type == WalRecordType::ABORT) {
+            continue;
+        }
+        if (rec.redo_len != static_cast<uint16_t>(adapttree::PAGE_SIZE)) {
+            continue;
+        }
+
+        bool ok = dm.readPage(rec.page_id, disk_buf.data());
+        uint64_t disk_page_lsn = 0;
+        if (ok) {
+            std::memcpy(&disk_page_lsn, disk_buf.data() + 20, sizeof(uint64_t));
+        }
+
+        if (disk_page_lsn >= rec.lsn) {
+            continue;
+        }
+
+        dm.writePage(rec.page_id,
+                     reinterpret_cast<const std::byte*>(rec.redo_data.data()));
+    }
+
+    dm.flush();
 }
