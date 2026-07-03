@@ -232,7 +232,9 @@ public:
     bool update(uint64_t key, uint64_t new_value);
 
     // Look up key.  Returns the associated value, or nullopt if not found.
-    std::optional<uint64_t> get(uint64_t key);
+    // snapshot_ts: only entries with commit_ts <= snapshot_ts are visible.
+    // Defaults to UINT64_MAX (all committed data visible — backward-compatible).
+    std::optional<uint64_t> get(uint64_t key, uint64_t snapshot_ts = UINT64_MAX);
 
     // Return the current height of the tree (1 means the root is a leaf node).
     uint32_t height();

@@ -293,7 +293,7 @@ uint32_t BPlusTree<WAL_T, MVCC_T>::findLeaf(uint64_t key, std::vector<uint32_t>&
 // ─────────────────────────────────────────────────────────────────────────────
 
 template <typename WAL_T, typename MVCC_T>
-std::optional<uint64_t> BPlusTree<WAL_T, MVCC_T>::get(uint64_t key)
+std::optional<uint64_t> BPlusTree<WAL_T, MVCC_T>::get(uint64_t key, uint64_t snapshot_ts)
 {
     std::vector<uint32_t> path;
     uint32_t leaf_id = findLeaf(key, path);
@@ -303,23 +303,31 @@ std::optional<uint64_t> BPlusTree<WAL_T, MVCC_T>::get(uint64_t key)
     const auto* leaf = reinterpret_cast<const LeafNode*>(g->data());
 
     // Use learned index path if enabled; otherwise fall back to traditional binary search.
+    uint32_t slot_idx;
     uint64_t raw_value;
+    uint64_t entry_commit_ts;
     if (use_learned_index_) {
         auto opt_idx = findSlotLearned(leaf, key);
         if (!opt_idx) return std::nullopt;
-        raw_value = leaf->entries[*opt_idx].value;
+        slot_idx       = static_cast<uint32_t>(*opt_idx);
+        raw_value      = leaf->entries[slot_idx].value;
+        entry_commit_ts = leaf->entries[slot_idx].commit_ts;
     } else {
         int idx = findSlotInLeaf(leaf, key);
         if (idx < 0) return std::nullopt;
-        raw_value = leaf->entries[idx].value;
+        slot_idx       = static_cast<uint32_t>(idx);
+        raw_value      = leaf->entries[slot_idx].value;
+        entry_commit_ts = leaf->entries[slot_idx].commit_ts;
     }
-    // MVCC visibility check: pass commit_ts=0 (per-slot commit_ts not yet stored in LeafEntry).
-    // For TrivialMvcc this is a no-op passthrough; for real MVCC it enforces snapshot isolation.
+    // MVCC visibility check: pass the real per-slot commit_ts so snapshot isolation works.
+    // snapshot_ts overrides txn.read_ts to let callers query a historical snapshot.
+    // For TrivialMvcc, read_version() always returns current_value (read_ts ignored).
     auto txn     = mvcc_.begin();
-    auto visible = mvcc_.read_version(txn, /*page_id*/leaf_id, /*slot_idx*/0u,
-                                      raw_value, /*current_commit_ts*/0u);
+    txn.read_ts  = snapshot_ts;
+    auto visible = mvcc_.read_version(txn, /*page_id*/leaf_id, slot_idx,
+                                      raw_value, entry_commit_ts);
     mvcc_.commit(txn);
-    return visible;  // nullopt if not visible to this txn's snapshot
+    return visible;  // nullopt if not visible to this snapshot
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
