@@ -30,9 +30,9 @@ BPlusTree<WAL_T, MVCC_T>::BPlusTree(BufferPool<WAL_T>& pool, WAL_T& wal)
             meta->header.free_end     = 0;
             meta->header.flags        = 0;
             meta->header.next_leaf_id = INVALID_PAGE_ID;
-            { WalRecord _r; _r.record_type = WalRecordType::INSERT; _r.page_id = META_PAGE_ID; _r.redo_len = 0; _r.undo_len = 0; meta->header.lsn = wal_.append(_r); }
             meta->tree_height         = 1;
             meta->root_page_id        = 1;
+            { WalRecord _r; _r.record_type = WalRecordType::INSERT; _r.page_id = META_PAGE_ID; const auto* _pg = reinterpret_cast<const uint8_t*>(meta); _r.redo_data.assign(_pg, _pg + PAGE_SIZE); _r.redo_len = static_cast<uint16_t>(PAGE_SIZE); _r.undo_len = 0; meta->header.lsn = wal_.append(_r); }
             meta_g->markDirty();
         }
         {
@@ -47,7 +47,7 @@ BPlusTree<WAL_T, MVCC_T>::BPlusTree(BufferPool<WAL_T>& pool, WAL_T& wal)
             root->header.free_end     = 0;
             root->header.flags        = 0;
             root->header.next_leaf_id = INVALID_PAGE_ID;
-            { WalRecord _r; _r.record_type = WalRecordType::INSERT; _r.page_id = root_g->page_id(); _r.redo_len = 0; _r.undo_len = 0; root->header.lsn = wal_.append(_r); }
+            { WalRecord _r; _r.record_type = WalRecordType::INSERT; _r.page_id = root_g->page_id(); const auto* _pg = reinterpret_cast<const uint8_t*>(root); _r.redo_data.assign(_pg, _pg + PAGE_SIZE); _r.redo_len = static_cast<uint16_t>(PAGE_SIZE); _r.undo_len = 0; root->header.lsn = wal_.append(_r); }
             root_g->markDirty();
         }
     }
@@ -72,9 +72,9 @@ BPlusTree<WAL_T, MVCC_T>::BPlusTree(BufferPool<WAL_T>& pool, WAL_T& wal, MVCC_T&
             meta->header.free_end     = 0;
             meta->header.flags        = 0;
             meta->header.next_leaf_id = INVALID_PAGE_ID;
-            { WalRecord _r; _r.record_type = WalRecordType::INSERT; _r.page_id = META_PAGE_ID; _r.redo_len = 0; _r.undo_len = 0; meta->header.lsn = wal_.append(_r); }
             meta->tree_height         = 1;
             meta->root_page_id        = 1;
+            { WalRecord _r; _r.record_type = WalRecordType::INSERT; _r.page_id = META_PAGE_ID; const auto* _pg = reinterpret_cast<const uint8_t*>(meta); _r.redo_data.assign(_pg, _pg + PAGE_SIZE); _r.redo_len = static_cast<uint16_t>(PAGE_SIZE); _r.undo_len = 0; meta->header.lsn = wal_.append(_r); }
             meta_g->markDirty();
         }
         {
@@ -89,7 +89,7 @@ BPlusTree<WAL_T, MVCC_T>::BPlusTree(BufferPool<WAL_T>& pool, WAL_T& wal, MVCC_T&
             root->header.free_end     = 0;
             root->header.flags        = 0;
             root->header.next_leaf_id = INVALID_PAGE_ID;
-            { WalRecord _r; _r.record_type = WalRecordType::INSERT; _r.page_id = root_g->page_id(); _r.redo_len = 0; _r.undo_len = 0; root->header.lsn = wal_.append(_r); }
+            { WalRecord _r; _r.record_type = WalRecordType::INSERT; _r.page_id = root_g->page_id(); const auto* _pg = reinterpret_cast<const uint8_t*>(root); _r.redo_data.assign(_pg, _pg + PAGE_SIZE); _r.redo_len = static_cast<uint16_t>(PAGE_SIZE); _r.undo_len = 0; root->header.lsn = wal_.append(_r); }
             root_g->markDirty();
         }
     }
@@ -192,7 +192,7 @@ void BPlusTree<WAL_T, MVCC_T>::set_root_page_id(uint32_t new_root_id)
     assert(g.has_value());
     auto* meta           = reinterpret_cast<MetaPage*>(g->data());
     meta->root_page_id   = new_root_id;
-    { WalRecord _r; _r.record_type = WalRecordType::UPDATE; _r.page_id = META_PAGE_ID; _r.redo_len = 0; _r.undo_len = 0; meta->header.lsn = wal_.append(_r); }
+    { WalRecord _r; _r.record_type = WalRecordType::UPDATE; _r.page_id = META_PAGE_ID; const auto* _pg = reinterpret_cast<const uint8_t*>(meta); _r.redo_data.assign(_pg, _pg + PAGE_SIZE); _r.redo_len = static_cast<uint16_t>(PAGE_SIZE); _r.undo_len = 0; meta->header.lsn = wal_.append(_r); }
     g->markDirty();
 }
 
@@ -203,7 +203,7 @@ void BPlusTree<WAL_T, MVCC_T>::set_height(uint32_t h)
     assert(g.has_value());
     auto* meta         = reinterpret_cast<MetaPage*>(g->data());
     meta->tree_height  = h;
-    { WalRecord _r; _r.record_type = WalRecordType::UPDATE; _r.page_id = META_PAGE_ID; _r.redo_len = 0; _r.undo_len = 0; meta->header.lsn = wal_.append(_r); }
+    { WalRecord _r; _r.record_type = WalRecordType::UPDATE; _r.page_id = META_PAGE_ID; const auto* _pg = reinterpret_cast<const uint8_t*>(meta); _r.redo_data.assign(_pg, _pg + PAGE_SIZE); _r.redo_len = static_cast<uint16_t>(PAGE_SIZE); _r.undo_len = 0; meta->header.lsn = wal_.append(_r); }
     g->markDirty();
 }
 
@@ -352,10 +352,10 @@ bool BPlusTree<WAL_T, MVCC_T>::insert_into_parent(const std::vector<uint32_t>& p
         nr->header.free_start   = 0;
         nr->header.free_end     = 0;
         nr->header.next_leaf_id = INVALID_PAGE_ID;
-        { WalRecord _r; _r.record_type = WalRecordType::INSERT; _r.page_id = new_root_id; _r.redo_len = 0; _r.undo_len = 0; nr->header.lsn = wal_.append(_r); }
         nr->keys[0]             = fence_key;
         nr->children[0]         = left_child_id;
         nr->children[1]         = right_child_id;
+        { WalRecord _r; _r.record_type = WalRecordType::INSERT; _r.page_id = new_root_id; const auto* _pg = reinterpret_cast<const uint8_t*>(nr); _r.redo_data.assign(_pg, _pg + PAGE_SIZE); _r.redo_len = static_cast<uint16_t>(PAGE_SIZE); _r.undo_len = 0; nr->header.lsn = wal_.append(_r); }
         new_root_g->markDirty();
 
         // Update meta
@@ -393,7 +393,7 @@ bool BPlusTree<WAL_T, MVCC_T>::insert_into_parent(const std::vector<uint32_t>& p
             parent->keys[pos]        = fence_key;
             parent->children[pos + 1] = right_child_id;
             parent->header.num_slots  = static_cast<uint16_t>(ns + 1);
-            { WalRecord _r; _r.record_type = WalRecordType::UPDATE; _r.page_id = parent_id; _r.redo_len = 0; _r.undo_len = 0; parent->header.lsn = wal_.append(_r); }
+            { WalRecord _r; _r.record_type = WalRecordType::UPDATE; _r.page_id = parent_id; const auto* _pg = reinterpret_cast<const uint8_t*>(parent); _r.redo_data.assign(_pg, _pg + PAGE_SIZE); _r.redo_len = static_cast<uint16_t>(PAGE_SIZE); _r.undo_len = 0; parent->header.lsn = wal_.append(_r); }
             parent_g->markDirty();
             return true;
         }
@@ -425,7 +425,7 @@ bool BPlusTree<WAL_T, MVCC_T>::insert_into_parent(const std::vector<uint32_t>& p
         std::memcpy(parent->keys,     all_keys,     SPLIT_HALF * sizeof(uint64_t));
         std::memcpy(parent->children, all_children, (SPLIT_HALF + 1) * sizeof(uint32_t));
         parent->header.num_slots = static_cast<uint16_t>(SPLIT_HALF);
-        { WalRecord _r; _r.record_type = WalRecordType::UPDATE; _r.page_id = parent_id; _r.redo_len = 0; _r.undo_len = 0; parent->header.lsn = wal_.append(_r); }
+        { WalRecord _r; _r.record_type = WalRecordType::UPDATE; _r.page_id = parent_id; const auto* _pg = reinterpret_cast<const uint8_t*>(parent); _r.redo_data.assign(_pg, _pg + PAGE_SIZE); _r.redo_len = static_cast<uint16_t>(PAGE_SIZE); _r.undo_len = 0; parent->header.lsn = wal_.append(_r); }
         parent_g->markDirty();
 
         // Allocate right internal node before parent_g destructs
@@ -456,14 +456,13 @@ bool BPlusTree<WAL_T, MVCC_T>::insert_into_parent(const std::vector<uint32_t>& p
         rn->header.free_start   = 0;
         rn->header.free_end     = 0;
         rn->header.next_leaf_id = INVALID_PAGE_ID;
-        { WalRecord _r; _r.record_type = WalRecordType::INSERT; _r.page_id = right_int_id; _r.redo_len = 0; _r.undo_len = 0; rn->header.lsn = wal_.append(_r); }
-
         std::memcpy(rn->keys,
                     &all_keys[SPLIT_HALF + 1],
                     right_key_count * sizeof(uint64_t));
         std::memcpy(rn->children,
                     &all_children[SPLIT_HALF + 1],
                     (right_key_count + 1) * sizeof(uint32_t));
+        { WalRecord _r; _r.record_type = WalRecordType::INSERT; _r.page_id = right_int_id; const auto* _pg = reinterpret_cast<const uint8_t*>(rn); _r.redo_data.assign(_pg, _pg + PAGE_SIZE); _r.redo_len = static_cast<uint16_t>(PAGE_SIZE); _r.undo_len = 0; rn->header.lsn = wal_.append(_r); }
         right_int_g->markDirty();
 
         // right_int_g and parent_g both destruct here (unpin)
@@ -503,18 +502,7 @@ bool BPlusTree<WAL_T, MVCC_T>::insert(uint64_t key, uint64_t value)
         int n = static_cast<int>(leaf->header.num_slots);
 
         if (n < static_cast<int>(ORDER)) {
-            // Leaf has space — WAL-before-data (WAL-02): log before touching page bytes
-            WalRecord wal_rec;
-            wal_rec.txn_id      = next_txn_id_.fetch_add(1, std::memory_order_relaxed);
-            wal_rec.page_id     = leaf_id;
-            wal_rec.record_type = WalRecordType::INSERT;
-            wal_rec.redo_data.resize(16);
-            std::memcpy(wal_rec.redo_data.data(),     &key,   8);
-            std::memcpy(wal_rec.redo_data.data() + 8, &value, 8);
-            wal_rec.redo_len = 16;
-            wal_rec.undo_len = 0;
-            uint64_t lsn = wal_.append(wal_rec);
-            // Now write actual slot data:
+            // Mutate page first, then capture full after-image into WAL record.
             if (insert_pos < n) {
                 std::memmove(&leaf->entries[insert_pos + 1],
                              &leaf->entries[insert_pos],
@@ -522,12 +510,20 @@ bool BPlusTree<WAL_T, MVCC_T>::insert(uint64_t key, uint64_t value)
             }
             leaf->entries[insert_pos] = {key, value};
             leaf->header.num_slots    = static_cast<uint16_t>(n + 1);
-            leaf->header.lsn          = lsn;
             // LEARN-05: track staleness; saturate at UINT16_MAX
             if (leaf->model.has_model &&
                 leaf->model.inserts_since_model_rebuild < UINT16_MAX) {
                 ++leaf->model.inserts_since_model_rebuild;
             }
+            WalRecord wal_rec;
+            wal_rec.txn_id      = next_txn_id_.fetch_add(1, std::memory_order_relaxed);
+            wal_rec.page_id     = leaf_id;
+            wal_rec.record_type = WalRecordType::INSERT;
+            const auto* _pg = reinterpret_cast<const uint8_t*>(leaf);
+            wal_rec.redo_data.assign(_pg, _pg + PAGE_SIZE);
+            wal_rec.redo_len = static_cast<uint16_t>(PAGE_SIZE);
+            wal_rec.undo_len = 0;
+            leaf->header.lsn = wal_.append(wal_rec);
             leaf_g->markDirty();
             return true;
         }
@@ -554,8 +550,7 @@ bool BPlusTree<WAL_T, MVCC_T>::insert(uint64_t key, uint64_t value)
         // Instead: write SPLIT_HALF into the leaf now, then call split_leaf with
         // a different protocol where the right half comes from our local all_entries.
 
-        // Write SPLIT_HALF entries into left leaf — WAL-before-data (WAL-02)
-        { WalRecord _r; _r.txn_id = next_txn_id_.fetch_add(1, std::memory_order_relaxed); _r.record_type = WalRecordType::INSERT; _r.page_id = leaf_id; _r.redo_len = 0; _r.undo_len = 0; leaf->header.lsn = wal_.append(_r); }
+        // Write SPLIT_HALF entries into left leaf, then capture full page after-image.
         std::memcpy(leaf->entries, all_entries, SPLIT_HALF * sizeof(LeafEntry));
         leaf->header.num_slots    = static_cast<uint16_t>(SPLIT_HALF);
         // LEARN-02: fit a learned model for the left child immediately after split.
@@ -587,6 +582,7 @@ bool BPlusTree<WAL_T, MVCC_T>::insert(uint64_t key, uint64_t value)
 #endif
             }
         }
+        { WalRecord _r; _r.txn_id = next_txn_id_.fetch_add(1, std::memory_order_relaxed); _r.record_type = WalRecordType::INSERT; _r.page_id = leaf_id; const auto* _pg = reinterpret_cast<const uint8_t*>(leaf); _r.redo_data.assign(_pg, _pg + PAGE_SIZE); _r.redo_len = static_cast<uint16_t>(PAGE_SIZE); _r.undo_len = 0; leaf->header.lsn = wal_.append(_r); }
         leaf_g->markDirty();
 
         uint32_t old_next = leaf->header.next_leaf_id;
@@ -626,8 +622,6 @@ bool BPlusTree<WAL_T, MVCC_T>::insert(uint64_t key, uint64_t value)
         right->header.free_start   = 0;
         right->header.free_end     = 0;
         right->header.next_leaf_id = captured_old_next;
-        { WalRecord _r; _r.txn_id = next_txn_id_.fetch_add(1, std::memory_order_relaxed); _r.record_type = WalRecordType::INSERT; _r.page_id = right_id; _r.redo_len = 0; _r.undo_len = 0; right->header.lsn = wal_.append(_r); }
-
         std::memcpy(right->entries,
                     &all_entries[SPLIT_HALF],
                     (ORDER + 1 - SPLIT_HALF) * sizeof(LeafEntry));
@@ -657,12 +651,13 @@ bool BPlusTree<WAL_T, MVCC_T>::insert(uint64_t key, uint64_t value)
 #endif
             }
         }
+        { WalRecord _r; _r.txn_id = next_txn_id_.fetch_add(1, std::memory_order_relaxed); _r.record_type = WalRecordType::INSERT; _r.page_id = right_id; const auto* _pg = reinterpret_cast<const uint8_t*>(right); _r.redo_data.assign(_pg, _pg + PAGE_SIZE); _r.redo_len = static_cast<uint16_t>(PAGE_SIZE); _r.undo_len = 0; right->header.lsn = wal_.append(_r); }
         right_g->markDirty();
 
         // Update left leaf's next_leaf_id → right_id
         // leaf_g still alive at this point so we can update through it
         leaf->header.next_leaf_id = right_id;
-        { WalRecord _r; _r.record_type = WalRecordType::UPDATE; _r.page_id = leaf_id; _r.redo_len = 0; _r.undo_len = 0; leaf->header.lsn = wal_.append(_r); }
+        { WalRecord _r; _r.record_type = WalRecordType::UPDATE; _r.page_id = leaf_id; const auto* _pg = reinterpret_cast<const uint8_t*>(leaf); _r.redo_data.assign(_pg, _pg + PAGE_SIZE); _r.redo_len = static_cast<uint16_t>(PAGE_SIZE); _r.undo_len = 0; leaf->header.lsn = wal_.append(_r); }
         leaf_g->markDirty();
 
         uint64_t fence_key = all_entries[SPLIT_HALF].key;
@@ -735,7 +730,7 @@ bool BPlusTree<WAL_T, MVCC_T>::remove_from_leaf(uint32_t leaf_id, uint64_t key)
                      static_cast<size_t>(n - 1 - idx) * sizeof(LeafEntry));
     }
     leaf->header.num_slots = static_cast<uint16_t>(n - 1);
-    { WalRecord _r; _r.record_type = WalRecordType::DELETE; _r.page_id = leaf_id; _r.redo_len = 0; _r.undo_len = 0; leaf->header.lsn = wal_.append(_r); }
+    { WalRecord _r; _r.record_type = WalRecordType::DELETE; _r.page_id = leaf_id; const auto* _pg = reinterpret_cast<const uint8_t*>(leaf); _r.redo_data.assign(_pg, _pg + PAGE_SIZE); _r.redo_len = static_cast<uint16_t>(PAGE_SIZE); _r.undo_len = 0; leaf->header.lsn = wal_.append(_r); }
     g->markDirty();
     return true;
 }
@@ -787,16 +782,16 @@ bool BPlusTree<WAL_T, MVCC_T>::redistribute_leaves(uint32_t parent_id, int child
                          static_cast<size_t>(uf_n) * sizeof(LeafEntry));
             uf->entries[0]         = left_sib->entries[lf_n - 1];
             uf->header.num_slots   = static_cast<uint16_t>(uf_n + 1);
-            { WalRecord _r; _r.record_type = WalRecordType::UPDATE; _r.page_id = underfull_id; _r.redo_len = 0; _r.undo_len = 0; uf->header.lsn = wal_.append(_r); }
+            { WalRecord _r; _r.record_type = WalRecordType::UPDATE; _r.page_id = underfull_id; const auto* _pg = reinterpret_cast<const uint8_t*>(uf); _r.redo_data.assign(_pg, _pg + PAGE_SIZE); _r.redo_len = static_cast<uint16_t>(PAGE_SIZE); _r.undo_len = 0; uf->header.lsn = wal_.append(_r); }
             uf_g->markDirty();
 
             left_sib->header.num_slots = static_cast<uint16_t>(lf_n - 1);
-            { WalRecord _r; _r.record_type = WalRecordType::UPDATE; _r.page_id = left_sib_id; _r.redo_len = 0; _r.undo_len = 0; left_sib->header.lsn = wal_.append(_r); }
+            { WalRecord _r; _r.record_type = WalRecordType::UPDATE; _r.page_id = left_sib_id; const auto* _pg = reinterpret_cast<const uint8_t*>(left_sib); _r.redo_data.assign(_pg, _pg + PAGE_SIZE); _r.redo_len = static_cast<uint16_t>(PAGE_SIZE); _r.undo_len = 0; left_sib->header.lsn = wal_.append(_r); }
             left_g->markDirty();
 
             // Update parent separator: parent->keys[child_idx-1] = first key of underfull
             parent->keys[child_idx - 1] = uf->entries[0].key;
-            { WalRecord _r; _r.record_type = WalRecordType::UPDATE; _r.page_id = parent_id; _r.redo_len = 0; _r.undo_len = 0; parent->header.lsn = wal_.append(_r); }
+            { WalRecord _r; _r.record_type = WalRecordType::UPDATE; _r.page_id = parent_id; const auto* _pg = reinterpret_cast<const uint8_t*>(parent); _r.redo_data.assign(_pg, _pg + PAGE_SIZE); _r.redo_len = static_cast<uint16_t>(PAGE_SIZE); _r.undo_len = 0; parent->header.lsn = wal_.append(_r); }
             parent_g->markDirty();
             return true;
         }
@@ -820,19 +815,19 @@ bool BPlusTree<WAL_T, MVCC_T>::redistribute_leaves(uint32_t parent_id, int child
 
             uf->entries[uf_n]      = right_sib->entries[0];
             uf->header.num_slots   = static_cast<uint16_t>(uf_n + 1);
-            { WalRecord _r; _r.record_type = WalRecordType::UPDATE; _r.page_id = underfull_id; _r.redo_len = 0; _r.undo_len = 0; uf->header.lsn = wal_.append(_r); }
+            { WalRecord _r; _r.record_type = WalRecordType::UPDATE; _r.page_id = underfull_id; const auto* _pg = reinterpret_cast<const uint8_t*>(uf); _r.redo_data.assign(_pg, _pg + PAGE_SIZE); _r.redo_len = static_cast<uint16_t>(PAGE_SIZE); _r.undo_len = 0; uf->header.lsn = wal_.append(_r); }
             uf_g->markDirty();
 
             // Shift right sibling's entries left by 1
             std::memmove(&right_sib->entries[0], &right_sib->entries[1],
                          static_cast<size_t>(rf_n - 1) * sizeof(LeafEntry));
             right_sib->header.num_slots = static_cast<uint16_t>(rf_n - 1);
-            { WalRecord _r; _r.record_type = WalRecordType::UPDATE; _r.page_id = right_sib_id; _r.redo_len = 0; _r.undo_len = 0; right_sib->header.lsn = wal_.append(_r); }
+            { WalRecord _r; _r.record_type = WalRecordType::UPDATE; _r.page_id = right_sib_id; const auto* _pg = reinterpret_cast<const uint8_t*>(right_sib); _r.redo_data.assign(_pg, _pg + PAGE_SIZE); _r.redo_len = static_cast<uint16_t>(PAGE_SIZE); _r.undo_len = 0; right_sib->header.lsn = wal_.append(_r); }
             right_g->markDirty();
 
             // Update parent separator: parent->keys[child_idx] = first key of right sibling
             parent->keys[child_idx] = right_sib->entries[0].key;
-            { WalRecord _r; _r.record_type = WalRecordType::UPDATE; _r.page_id = parent_id; _r.redo_len = 0; _r.undo_len = 0; parent->header.lsn = wal_.append(_r); }
+            { WalRecord _r; _r.record_type = WalRecordType::UPDATE; _r.page_id = parent_id; const auto* _pg = reinterpret_cast<const uint8_t*>(parent); _r.redo_data.assign(_pg, _pg + PAGE_SIZE); _r.redo_len = static_cast<uint16_t>(PAGE_SIZE); _r.undo_len = 0; parent->header.lsn = wal_.append(_r); }
             parent_g->markDirty();
             return true;
         }
@@ -878,13 +873,13 @@ void BPlusTree<WAL_T, MVCC_T>::merge_leaves(uint32_t parent_id, int child_idx)
                     static_cast<size_t>(rn) * sizeof(LeafEntry));
         left->header.num_slots  = static_cast<uint16_t>(ln + rn);
         left->header.next_leaf_id = right->header.next_leaf_id;
-        { WalRecord _r; _r.record_type = WalRecordType::UPDATE; _r.page_id = left_id; _r.redo_len = 0; _r.undo_len = 0; left->header.lsn = wal_.append(_r); }
+        { WalRecord _r; _r.record_type = WalRecordType::UPDATE; _r.page_id = left_id; const auto* _pg = reinterpret_cast<const uint8_t*>(left); _r.redo_data.assign(_pg, _pg + PAGE_SIZE); _r.redo_len = static_cast<uint16_t>(PAGE_SIZE); _r.undo_len = 0; left->header.lsn = wal_.append(_r); }
         left_g->markDirty();
 
         // Mark right as FREE
         right->header.page_type = PageType::FREE;
         right->header.num_slots = 0;
-        { WalRecord _r; _r.record_type = WalRecordType::UPDATE; _r.page_id = right_id; _r.redo_len = 0; _r.undo_len = 0; right->header.lsn = wal_.append(_r); }
+        { WalRecord _r; _r.record_type = WalRecordType::UPDATE; _r.page_id = right_id; const auto* _pg = reinterpret_cast<const uint8_t*>(right); _r.redo_data.assign(_pg, _pg + PAGE_SIZE); _r.redo_len = static_cast<uint16_t>(PAGE_SIZE); _r.undo_len = 0; right->header.lsn = wal_.append(_r); }
         right_g->markDirty();
     }
 
@@ -896,7 +891,7 @@ void BPlusTree<WAL_T, MVCC_T>::merge_leaves(uint32_t parent_id, int child_idx)
                      static_cast<size_t>(parent_ns - 1 - sep_idx) * sizeof(uint32_t));
     }
     parent->header.num_slots = static_cast<uint16_t>(parent_ns - 1);
-    { WalRecord _r; _r.record_type = WalRecordType::UPDATE; _r.page_id = parent_id; _r.redo_len = 0; _r.undo_len = 0; parent->header.lsn = wal_.append(_r); }
+    { WalRecord _r; _r.record_type = WalRecordType::UPDATE; _r.page_id = parent_id; const auto* _pg = reinterpret_cast<const uint8_t*>(parent); _r.redo_data.assign(_pg, _pg + PAGE_SIZE); _r.redo_len = static_cast<uint16_t>(PAGE_SIZE); _r.undo_len = 0; parent->header.lsn = wal_.append(_r); }
     parent_g->markDirty();
 }
 
@@ -935,16 +930,16 @@ bool BPlusTree<WAL_T, MVCC_T>::redistribute_internal(uint32_t grandparent_id, in
             uf->keys[0]     = gp->keys[child_idx - 1];
             uf->children[0] = left_sib->children[lf_ns];
             uf->header.num_slots = static_cast<uint16_t>(uf_ns + 1);
-            { WalRecord _r; _r.record_type = WalRecordType::UPDATE; _r.page_id = underfull_id; _r.redo_len = 0; _r.undo_len = 0; uf->header.lsn = wal_.append(_r); }
+            { WalRecord _r; _r.record_type = WalRecordType::UPDATE; _r.page_id = underfull_id; const auto* _pg = reinterpret_cast<const uint8_t*>(uf); _r.redo_data.assign(_pg, _pg + PAGE_SIZE); _r.redo_len = static_cast<uint16_t>(PAGE_SIZE); _r.undo_len = 0; uf->header.lsn = wal_.append(_r); }
             uf_g->markDirty();
 
             // Promote left_sib's last key to grandparent
             gp->keys[child_idx - 1] = left_sib->keys[lf_ns - 1];
-            { WalRecord _r; _r.record_type = WalRecordType::UPDATE; _r.page_id = grandparent_id; _r.redo_len = 0; _r.undo_len = 0; gp->header.lsn = wal_.append(_r); }
+            { WalRecord _r; _r.record_type = WalRecordType::UPDATE; _r.page_id = grandparent_id; const auto* _pg = reinterpret_cast<const uint8_t*>(gp); _r.redo_data.assign(_pg, _pg + PAGE_SIZE); _r.redo_len = static_cast<uint16_t>(PAGE_SIZE); _r.undo_len = 0; gp->header.lsn = wal_.append(_r); }
             gp_g->markDirty();
 
             left_sib->header.num_slots = static_cast<uint16_t>(lf_ns - 1);
-            { WalRecord _r; _r.record_type = WalRecordType::UPDATE; _r.page_id = left_sib_id; _r.redo_len = 0; _r.undo_len = 0; left_sib->header.lsn = wal_.append(_r); }
+            { WalRecord _r; _r.record_type = WalRecordType::UPDATE; _r.page_id = left_sib_id; const auto* _pg = reinterpret_cast<const uint8_t*>(left_sib); _r.redo_data.assign(_pg, _pg + PAGE_SIZE); _r.redo_len = static_cast<uint16_t>(PAGE_SIZE); _r.undo_len = 0; left_sib->header.lsn = wal_.append(_r); }
             left_g->markDirty();
             return true;
         }
@@ -968,12 +963,12 @@ bool BPlusTree<WAL_T, MVCC_T>::redistribute_internal(uint32_t grandparent_id, in
             uf->keys[uf_ns]       = gp->keys[child_idx];
             uf->children[uf_ns + 1] = right_sib->children[0];
             uf->header.num_slots  = static_cast<uint16_t>(uf_ns + 1);
-            { WalRecord _r; _r.record_type = WalRecordType::UPDATE; _r.page_id = underfull_id; _r.redo_len = 0; _r.undo_len = 0; uf->header.lsn = wal_.append(_r); }
+            { WalRecord _r; _r.record_type = WalRecordType::UPDATE; _r.page_id = underfull_id; const auto* _pg = reinterpret_cast<const uint8_t*>(uf); _r.redo_data.assign(_pg, _pg + PAGE_SIZE); _r.redo_len = static_cast<uint16_t>(PAGE_SIZE); _r.undo_len = 0; uf->header.lsn = wal_.append(_r); }
             uf_g->markDirty();
 
             // Promote right_sib's first key to grandparent
             gp->keys[child_idx] = right_sib->keys[0];
-            { WalRecord _r; _r.record_type = WalRecordType::UPDATE; _r.page_id = grandparent_id; _r.redo_len = 0; _r.undo_len = 0; gp->header.lsn = wal_.append(_r); }
+            { WalRecord _r; _r.record_type = WalRecordType::UPDATE; _r.page_id = grandparent_id; const auto* _pg = reinterpret_cast<const uint8_t*>(gp); _r.redo_data.assign(_pg, _pg + PAGE_SIZE); _r.redo_len = static_cast<uint16_t>(PAGE_SIZE); _r.undo_len = 0; gp->header.lsn = wal_.append(_r); }
             gp_g->markDirty();
 
             // Shift right_sib left
@@ -982,7 +977,7 @@ bool BPlusTree<WAL_T, MVCC_T>::redistribute_internal(uint32_t grandparent_id, in
             std::memmove(&right_sib->children[0], &right_sib->children[1],
                          static_cast<size_t>(rf_ns) * sizeof(uint32_t));
             right_sib->header.num_slots = static_cast<uint16_t>(rf_ns - 1);
-            { WalRecord _r; _r.record_type = WalRecordType::UPDATE; _r.page_id = right_sib_id; _r.redo_len = 0; _r.undo_len = 0; right_sib->header.lsn = wal_.append(_r); }
+            { WalRecord _r; _r.record_type = WalRecordType::UPDATE; _r.page_id = right_sib_id; const auto* _pg = reinterpret_cast<const uint8_t*>(right_sib); _r.redo_data.assign(_pg, _pg + PAGE_SIZE); _r.redo_len = static_cast<uint16_t>(PAGE_SIZE); _r.undo_len = 0; right_sib->header.lsn = wal_.append(_r); }
             right_g->markDirty();
             return true;
         }
@@ -1032,13 +1027,13 @@ void BPlusTree<WAL_T, MVCC_T>::merge_internal(uint32_t grandparent_id, int child
         std::memcpy(&left->children[ln + 1], right->children,
                     static_cast<size_t>(rn + 1) * sizeof(uint32_t));
         left->header.num_slots = static_cast<uint16_t>(ln + 1 + rn);
-        { WalRecord _r; _r.record_type = WalRecordType::UPDATE; _r.page_id = left_id; _r.redo_len = 0; _r.undo_len = 0; left->header.lsn = wal_.append(_r); }
+        { WalRecord _r; _r.record_type = WalRecordType::UPDATE; _r.page_id = left_id; const auto* _pg = reinterpret_cast<const uint8_t*>(left); _r.redo_data.assign(_pg, _pg + PAGE_SIZE); _r.redo_len = static_cast<uint16_t>(PAGE_SIZE); _r.undo_len = 0; left->header.lsn = wal_.append(_r); }
         left_g->markDirty();
 
         // Mark right as FREE
         right->header.page_type = PageType::FREE;
         right->header.num_slots = 0;
-        { WalRecord _r; _r.record_type = WalRecordType::UPDATE; _r.page_id = right_id; _r.redo_len = 0; _r.undo_len = 0; right->header.lsn = wal_.append(_r); }
+        { WalRecord _r; _r.record_type = WalRecordType::UPDATE; _r.page_id = right_id; const auto* _pg = reinterpret_cast<const uint8_t*>(right); _r.redo_data.assign(_pg, _pg + PAGE_SIZE); _r.redo_len = static_cast<uint16_t>(PAGE_SIZE); _r.undo_len = 0; right->header.lsn = wal_.append(_r); }
         right_g->markDirty();
     }
 
@@ -1050,7 +1045,7 @@ void BPlusTree<WAL_T, MVCC_T>::merge_internal(uint32_t grandparent_id, int child
                      static_cast<size_t>(gp_ns - 1 - sep_idx) * sizeof(uint32_t));
     }
     gp->header.num_slots = static_cast<uint16_t>(gp_ns - 1);
-    { WalRecord _r; _r.record_type = WalRecordType::UPDATE; _r.page_id = grandparent_id; _r.redo_len = 0; _r.undo_len = 0; gp->header.lsn = wal_.append(_r); }
+    { WalRecord _r; _r.record_type = WalRecordType::UPDATE; _r.page_id = grandparent_id; const auto* _pg = reinterpret_cast<const uint8_t*>(gp); _r.redo_data.assign(_pg, _pg + PAGE_SIZE); _r.redo_len = static_cast<uint16_t>(PAGE_SIZE); _r.undo_len = 0; gp->header.lsn = wal_.append(_r); }
     gp_g->markDirty();
 }
 
@@ -1074,7 +1069,7 @@ void BPlusTree<WAL_T, MVCC_T>::fix_internal_underflow(
             uint32_t surviving_child = root->children[0];
             root->header.page_type   = PageType::FREE;
             root->header.num_slots   = 0;
-            { WalRecord _r; _r.record_type = WalRecordType::UPDATE; _r.page_id = node_id; _r.redo_len = 0; _r.undo_len = 0; root->header.lsn = wal_.append(_r); }
+            { WalRecord _r; _r.record_type = WalRecordType::UPDATE; _r.page_id = node_id; const auto* _pg = reinterpret_cast<const uint8_t*>(root); _r.redo_data.assign(_pg, _pg + PAGE_SIZE); _r.redo_len = static_cast<uint16_t>(PAGE_SIZE); _r.undo_len = 0; root->header.lsn = wal_.append(_r); }
             root_g->markDirty();
             set_root_page_id(surviving_child);
             uint32_t old_h = height();
@@ -1157,7 +1152,7 @@ bool BPlusTree<WAL_T, MVCC_T>::remove(uint64_t key)
             uint32_t surviving_child = root->children[0];
             root->header.page_type   = PageType::FREE;
             root->header.num_slots   = 0;
-            { WalRecord _r; _r.record_type = WalRecordType::UPDATE; _r.page_id = parent_id; _r.redo_len = 0; _r.undo_len = 0; root->header.lsn = wal_.append(_r); }
+            { WalRecord _r; _r.record_type = WalRecordType::UPDATE; _r.page_id = parent_id; const auto* _pg = reinterpret_cast<const uint8_t*>(root); _r.redo_data.assign(_pg, _pg + PAGE_SIZE); _r.redo_len = static_cast<uint16_t>(PAGE_SIZE); _r.undo_len = 0; root->header.lsn = wal_.append(_r); }
             root_g->markDirty();
             set_root_page_id(surviving_child);
             uint32_t old_h = height();
