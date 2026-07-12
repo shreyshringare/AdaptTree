@@ -1,7 +1,7 @@
 # AdaptTree
 
 > **A complete key-value storage engine built from scratch in C++20** — disk-backed pages, write-ahead logging, MVCC snapshot isolation, and a per-leaf learned index layer that cuts lookup latency by 16% on sequential workloads.
-> Validated by differential fuzzing against SQLite. **160/160 tests passing.**
+> Validated by differential fuzzing against SQLite. **165/165 tests passing.**
 
 ---
 
@@ -10,7 +10,7 @@
 | Metric | Value |
 |---|---|
 | Lines of C++ (src + include) | ~10,000 |
-| Test cases | **160 / 160 passing** |
+| Test cases | **165 / 165 passing** |
 | Lookup latency improvement (sequential keys) | **−16%** (197 → 165 ns/op) |
 | Comparison reduction (sequential, learned index ON) | **4.7×** (5.82 → 1.23 avg cmps/lookup) |
 | Fuzz validation | Two libFuzzer targets vs. live SQLite oracle |
@@ -74,6 +74,9 @@ The model (24 bytes) is stored in the 32-byte reserved area of the leaf page hea
 
 ### Measured Results (Release -O2, 10,000 keys, WSL2)
 
+![Benchmark results](docs/assets/benchmark.svg)
+
+
 | Distribution | Model | ns/op | avg\_cmp/iter | fallback rate |
 |---|---|---:|---:|---:|
 | Sequential | Off | 197.5 | 5.82 | — |
@@ -101,6 +104,8 @@ Full methodology: [`LEARNED_INDEX_RESULTS.md`](LEARNED_INDEX_RESULTS.md)
 ---
 
 ## Testing
+
+![Test suite — 165/165 passing](docs/assets/tests.svg)
 
 19 test files, one per subsystem or integration boundary:
 
@@ -135,7 +140,7 @@ for bin in build/tests/page_tests build/tests/disk_manager_tests \
 done
 ```
 
-**160 / 160 passing.**
+**165 / 165 passing.**
 
 ---
 
